@@ -33,6 +33,53 @@ It acts as a semantic memory layer on top of the Qdrant database.
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
    - Returns: Information stored in the Qdrant database as separate messages
+3. `qdrant-list-collections`
+   - List all Qdrant collections
+4. `qdrant-collection-exists`
+   - Check if a collection exists
+   - Input:
+     - `collection_name` (string, optional): Collection to check
+5. `qdrant-collection-info`
+   - Get collection details including vectors and payload schema
+   - Input:
+     - `collection_name` (string, optional): Collection to inspect
+6. `qdrant-collection-stats`
+   - Get collection statistics (points, segments, status)
+   - Input:
+     - `collection_name` (string, optional): Collection to inspect
+7. `qdrant-collection-vectors`
+   - List vector names and sizes for a collection
+   - Input:
+     - `collection_name` (string, optional): Collection to inspect
+8. `qdrant-collection-payload-schema`
+   - Get payload schema for a collection
+   - Input:
+     - `collection_name` (string, optional): Collection to inspect
+9. `qdrant-get-vector-name`
+   - Resolve the vector name used by this MCP server
+   - Input:
+     - `collection_name` (string, optional): Collection to inspect
+10. `qdrant-list-aliases`
+    - List all collection aliases
+11. `qdrant-collection-aliases`
+    - List aliases for a specific collection
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+12. `qdrant-collection-cluster-info`
+    - Get cluster info for a collection
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+13. `qdrant-list-snapshots`
+    - List snapshots for a collection
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+14. `qdrant-list-full-snapshots`
+    - List full cluster snapshots
+15. `qdrant-list-shard-snapshots`
+    - List snapshots for a specific shard
+    - Input:
+      - `collection_name` (string): Collection to inspect
+      - `shard_id` (integer): Shard id to list snapshots for
 
 ## Environment Variables
 
@@ -43,6 +90,7 @@ The configuration of the server is done using environment variables:
 | `QDRANT_URL`             | URL of the Qdrant server                                            | None                                                              |
 | `QDRANT_API_KEY`         | API key for the Qdrant server                                       | None                                                              |
 | `COLLECTION_NAME`        | Name of the default collection to use.                              | None                                                              |
+| `QDRANT_VECTOR_NAME`     | Override vector name used by the MCP server                         | None                                                              |
 | `QDRANT_LOCAL_PATH`      | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
 | `EMBEDDING_PROVIDER`     | Embedding provider to use (currently only "fastembed" is supported) | `fastembed`                                                       |
 | `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
