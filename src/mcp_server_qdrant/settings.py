@@ -46,6 +46,39 @@ class EmbeddingProviderSettings(BaseSettings):
         default="sentence-transformers/all-MiniLM-L6-v2",
         validation_alias="EMBEDDING_MODEL",
     )
+    vector_size: int | None = Field(
+        default=None,
+        validation_alias="EMBEDDING_VECTOR_SIZE",
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_API_KEY",
+    )
+    openai_base_url: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_BASE_URL",
+    )
+    openai_organization: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_ORG",
+    )
+    openai_project: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_PROJECT",
+    )
+
+    @model_validator(mode="after")
+    def check_openai_settings(self) -> "EmbeddingProviderSettings":
+        if self.provider_type == EmbeddingProviderType.OPENAI:
+            if not self.openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai."
+                )
+            if not self.model_name:
+                raise ValueError(
+                    "EMBEDDING_MODEL is required when EMBEDDING_PROVIDER=openai."
+                )
+        return self
 
 
 class FilterableField(BaseModel):

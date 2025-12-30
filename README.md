@@ -92,8 +92,13 @@ The configuration of the server is done using environment variables:
 | `COLLECTION_NAME`        | Name of the default collection to use.                              | None                                                              |
 | `QDRANT_VECTOR_NAME`     | Override vector name used by the MCP server                         | None                                                              |
 | `QDRANT_LOCAL_PATH`      | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
-| `EMBEDDING_PROVIDER`     | Embedding provider to use (currently only "fastembed" is supported) | `fastembed`                                                       |
+| `EMBEDDING_PROVIDER`     | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
 | `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
+| `EMBEDDING_VECTOR_SIZE`  | Vector size override (required for unknown OpenAI models)           | unset                                                             |
+| `OPENAI_API_KEY`         | OpenAI API key (required for `openai` provider)                     | unset                                                             |
+| `OPENAI_BASE_URL`        | OpenAI-compatible base URL (optional)                               | unset                                                             |
+| `OPENAI_ORG`             | OpenAI organization ID (optional)                                   | unset                                                             |
+| `OPENAI_PROJECT`         | OpenAI project ID (optional)                                        | unset                                                             |
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 
@@ -227,7 +232,9 @@ For local Qdrant mode:
 This MCP server will automatically create a collection with the specified name if it doesn't exist.
 
 By default, the server will use the `sentence-transformers/all-MiniLM-L6-v2` embedding model to encode memories.
-For the time being, only [FastEmbed](https://qdrant.github.io/fastembed/) models are supported.
+FastEmbed models are supported out of the box. To use OpenAI embeddings, set
+`EMBEDDING_PROVIDER=openai`, `OPENAI_API_KEY`, and an OpenAI model such as
+`text-embedding-3-large` (3072 dims) or `text-embedding-3-small` (1536 dims).
 
 ## Support for other tools
 
