@@ -125,6 +125,8 @@ class QdrantConnector:
         :return: A list of entries found.
         """
         collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
         collection_exists = await self._client.collection_exists(collection_name)
         if not collection_exists:
             return []
@@ -214,7 +216,9 @@ class QdrantConnector:
         response = await self._client.get_collection_aliases(collection_name)
         return response.aliases
 
-    async def list_snapshots(self, collection_name: str) -> list[models.SnapshotDescription]:
+    async def list_snapshots(
+        self, collection_name: str
+    ) -> list[models.SnapshotDescription]:
         return await self._client.list_snapshots(collection_name)
 
     async def list_full_snapshots(self) -> list[models.SnapshotDescription]:
@@ -304,7 +308,9 @@ class QdrantConnector:
 
     async def _resolve_vector_name(self, collection_name: str) -> str | None:
         if self._vector_name_override_set:
-            if not collection_name or not await self._client.collection_exists(collection_name):
+            if not collection_name or not await self._client.collection_exists(
+                collection_name
+            ):
                 return self._vector_name_override
 
             info = await self._client.get_collection(collection_name)

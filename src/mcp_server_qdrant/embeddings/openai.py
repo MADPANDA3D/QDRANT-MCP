@@ -4,7 +4,6 @@ from openai import OpenAI
 
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 
-
 OPENAI_MODEL_DIMS = {
     "text-embedding-3-large": 3072,
     "text-embedding-3-small": 1536,
@@ -29,12 +28,13 @@ class OpenAIProvider(EmbeddingProvider):
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for openai embeddings.")
         self.model_name = model_name
-        self._vector_size = vector_size or OPENAI_MODEL_DIMS.get(model_name)
-        if self._vector_size is None:
+        resolved_size = vector_size or OPENAI_MODEL_DIMS.get(model_name)
+        if resolved_size is None:
             raise ValueError(
                 "Unknown embedding size for OpenAI model "
                 f"'{model_name}'. Set EMBEDDING_VECTOR_SIZE."
             )
+        self._vector_size = resolved_size
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url or None,
