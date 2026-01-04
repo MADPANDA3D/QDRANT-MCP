@@ -238,7 +238,9 @@ class QdrantMCPServer(FastMCP):
             data = {"collection_name": name, "vectors": vectors}
             return format_json(data)
 
-        async def collection_payload_schema(ctx: Context, collection_name: str = "") -> str:
+        async def collection_payload_schema(
+            ctx: Context, collection_name: str = ""
+        ) -> str:
             name = resolve_collection_name(collection_name)
             schema = await self.qdrant_connector.get_collection_payload_schema(name)
             data = {"collection_name": name, "payload_schema": schema}
@@ -255,8 +257,7 @@ class QdrantMCPServer(FastMCP):
             if not aliases:
                 return "No aliases found."
             formatted = "\n".join(
-                f"- {alias.alias_name} -> {alias.collection_name}"
-                for alias in aliases
+                f"- {alias.alias_name} -> {alias.collection_name}" for alias in aliases
             )
             return f"Aliases:\n{formatted}"
 
@@ -266,12 +267,13 @@ class QdrantMCPServer(FastMCP):
             if not aliases:
                 return f"No aliases found for collection '{name}'."
             formatted = "\n".join(
-                f"- {alias.alias_name} -> {alias.collection_name}"
-                for alias in aliases
+                f"- {alias.alias_name} -> {alias.collection_name}" for alias in aliases
             )
             return f"Aliases for '{name}':\n{formatted}"
 
-        async def collection_cluster_info(ctx: Context, collection_name: str = "") -> str:
+        async def collection_cluster_info(
+            ctx: Context, collection_name: str = ""
+        ) -> str:
             name = resolve_collection_name(collection_name)
             info = await self.qdrant_connector.get_collection_cluster_info(name)
             data = info.model_dump() if hasattr(info, "model_dump") else info.dict()
