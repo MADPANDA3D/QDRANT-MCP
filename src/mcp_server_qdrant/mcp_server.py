@@ -315,8 +315,8 @@ class QdrantMCPServer(FastMCP):
             ctx: Context, shard_id: int, collection_name: str = ""
         ) -> str:
             name = resolve_collection_name(collection_name)
-            if shard_id <= 0:
-                raise ValueError("shard_id must be a positive integer")
+            if shard_id < 0:
+                raise ValueError("shard_id must be a non-negative integer")
             snapshots = await self.qdrant_connector.list_shard_snapshots(name, shard_id)
             if not snapshots:
                 return f"No snapshots found for collection '{name}' shard {shard_id}."

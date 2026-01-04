@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from collections.abc import Mapping
@@ -144,19 +145,28 @@ class QdrantConnector:
             "query": query_vector,
             "limit": limit,
             "query_filter": query_filter,
+            "with_payload": True,
         }
         if vector_name is not None:
             search_kwargs["using"] = vector_name
 
         search_results = await self._client.query_points(**search_kwargs)
 
-        return [
-            Entry(
-                content=result.payload["document"],
-                metadata=result.payload.get("metadata"),
-            )
-            for result in search_results.points
-        ]
+        entries: list[Entry] = []
+        for result in search_results.points:
+            payload = result.payload or {}
+            content = payload.get("document")
+            if content is None:
+                content = payload.get("content") or payload.get("text")
+            if content is None:
+                content = (
+                    json.dumps(payload, sort_keys=True)
+                    if payload
+                    else f"(no document payload for point {result.id})"
+                )
+            metadata = payload.get(METADATA_PATH) or payload.get("metadata")
+            entries.append(Entry(content=content, metadata=metadata))
+        return entries
 
     async def _ensure_collection_exists(self, collection_name: str):
         """
