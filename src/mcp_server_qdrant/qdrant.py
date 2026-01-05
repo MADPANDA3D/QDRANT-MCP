@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 Metadata = dict[str, Any]
 ArbitraryFilter = dict[str, Any]
+PointIdType = str | int | uuid.UUID
 
 
 class Entry(BaseModel):
@@ -243,8 +244,8 @@ class QdrantConnector:
         query_filter: models.Filter | None = None,
         limit: int = 10,
         with_payload: bool = True,
-        offset: models.PointId | None = None,
-    ) -> tuple[list[models.Record], models.PointId | None]:
+        offset: PointIdType | None = None,
+    ) -> tuple[list[models.Record], PointIdType | None]:
         collection_name = collection_name or self._default_collection_name
         if not collection_name:
             raise ValueError("collection_name is required")
