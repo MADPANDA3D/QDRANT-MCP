@@ -648,7 +648,9 @@ class QdrantMCPServer(FastMCP):
                     mmr_lambda = max(0.0, min(1.0, mmr_lambda))
 
                 query_vector = await self.embedding_provider.embed_query(query)
-                vector_name = await self.qdrant_connector.resolve_vector_name(collection)
+                vector_name = await self.qdrant_connector.resolve_vector_name(
+                    collection
+                )
                 candidate_limit = min(max(limit * 4, limit), 100)
                 points = await self.qdrant_connector.query_points(
                     query_vector,
@@ -905,7 +907,9 @@ class QdrantMCPServer(FastMCP):
             merged_filter = merge_filters([memory_filter_obj, query_filter_obj])
             if merged_filter is None:
                 if self.memory_settings.strict_params:
-                    raise ValueError("delete_by_filter requires a filter in strict mode.")
+                    raise ValueError(
+                        "delete_by_filter requires a filter in strict mode."
+                    )
                 state.warnings.append(
                     "No filter provided; operation targets entire collection."
                 )
@@ -936,21 +940,27 @@ class QdrantMCPServer(FastMCP):
             data = {"collections": collections, "count": len(collections)}
             return finish_request(state, data)
 
-        async def collection_exists(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_exists(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             exists = await self.qdrant_connector.collection_exists(name)
             data = {"collection_name": name, "exists": exists}
             return finish_request(state, data)
 
-        async def collection_info(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_info(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             summary = await self.qdrant_connector.get_collection_summary(name)
             summary["collection_name"] = name
             return finish_request(state, summary)
 
-        async def collection_stats(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_stats(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             info = await self.qdrant_connector.get_collection_info(name)
@@ -966,21 +976,27 @@ class QdrantMCPServer(FastMCP):
                 data["warnings"] = [str(warning) for warning in info.warnings]
             return finish_request(state, data)
 
-        async def collection_vectors(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_vectors(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             vectors = await self.qdrant_connector.get_collection_vectors(name)
             data = {"collection_name": name, "vectors": vectors}
             return finish_request(state, data)
 
-        async def collection_payload_schema(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_payload_schema(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             schema = await self.qdrant_connector.get_collection_payload_schema(name)
             data = {"collection_name": name, "payload_schema": schema}
             return finish_request(state, data)
 
-        async def get_vector_name(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def get_vector_name(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             vector_name = await self.qdrant_connector.resolve_vector_name(name)
@@ -1077,7 +1093,9 @@ class QdrantMCPServer(FastMCP):
                         break
 
                     payload = point.payload or {}
-                    metadata = payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    metadata = (
+                        payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    )
                     text = extract_payload_text(payload)
 
                     patch, patch_warnings = build_memory_backfill_patch(
@@ -1124,17 +1142,25 @@ class QdrantMCPServer(FastMCP):
             state = new_request(ctx, {})
             aliases = await self.qdrant_connector.list_aliases()
             data: list[dict[str, str]] = [
-                {"alias_name": alias.alias_name, "collection_name": alias.collection_name}
+                {
+                    "alias_name": alias.alias_name,
+                    "collection_name": alias.collection_name,
+                }
                 for alias in aliases
             ]
             return finish_request(state, {"aliases": data, "count": len(data)})
 
-        async def collection_aliases(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_aliases(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             aliases = await self.qdrant_connector.list_collection_aliases(name)
             data: list[dict[str, str]] = [
-                {"alias_name": alias.alias_name, "collection_name": alias.collection_name}
+                {
+                    "alias_name": alias.alias_name,
+                    "collection_name": alias.collection_name,
+                }
                 for alias in aliases
             ]
             return finish_request(
@@ -1142,7 +1168,9 @@ class QdrantMCPServer(FastMCP):
                 {"collection_name": name, "aliases": data, "count": len(data)},
             )
 
-        async def collection_cluster_info(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def collection_cluster_info(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             info = await self.qdrant_connector.get_collection_cluster_info(name)
@@ -1150,7 +1178,9 @@ class QdrantMCPServer(FastMCP):
             data["collection_name"] = name
             return finish_request(state, data)
 
-        async def list_snapshots(ctx: Context, collection_name: str = "") -> dict[str, Any]:
+        async def list_snapshots(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             snapshots = await self.qdrant_connector.list_snapshots(name)

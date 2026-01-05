@@ -173,9 +173,7 @@ def chunk_text(text: str, max_length: int) -> list[str]:
     return chunks or [text[:max_length]]
 
 
-def _coerce_text(
-    value: Any, field_name: str, strict: bool, warnings: list[str]
-) -> str:
+def _coerce_text(value: Any, field_name: str, strict: bool, warnings: list[str]) -> str:
     if isinstance(value, str):
         return value
     if strict:
