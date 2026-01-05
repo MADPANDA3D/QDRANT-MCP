@@ -81,27 +81,35 @@ All tool responses include a `meta` object with request telemetry.
     - Create payload indexes for the memory contract (idempotent)
     - Input:
       - `collection_name` (string, optional): Collection to update
-15. `qdrant-get-vector-name`
+15. `qdrant-backfill-memory-contract`
+    - Backfill missing memory contract fields for existing points
+    - Input:
+      - `collection_name` (string, optional): Collection to update
+      - `batch_size` (integer, optional): Scan batch size
+      - `max_points` (integer, optional): Limit scan count
+      - `dry_run` (boolean, optional): Report changes without writing
+      - `confirm` (boolean, optional): Required when dry_run is false
+16. `qdrant-get-vector-name`
     - Resolve the vector name used by this MCP server
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-16. `qdrant-list-aliases`
+17. `qdrant-list-aliases`
     - List all collection aliases
-17. `qdrant-collection-aliases`
+18. `qdrant-collection-aliases`
     - List aliases for a specific collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-18. `qdrant-collection-cluster-info`
+19. `qdrant-collection-cluster-info`
     - Get cluster info for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-19. `qdrant-list-snapshots`
+20. `qdrant-list-snapshots`
     - List snapshots for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-20. `qdrant-list-full-snapshots`
+21. `qdrant-list-full-snapshots`
     - List full cluster snapshots
-21. `qdrant-list-shard-snapshots`
+22. `qdrant-list-shard-snapshots`
     - List snapshots for a specific shard
     - Input:
       - `collection_name` (string): Collection to inspect

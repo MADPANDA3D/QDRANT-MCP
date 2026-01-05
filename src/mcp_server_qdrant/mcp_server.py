@@ -19,6 +19,7 @@ from mcp_server_qdrant.memory import (
     ALLOWED_MEMORY_KEYS,
     EmbeddingInfo,
     MemoryFilterInput,
+    build_memory_backfill_patch,
     build_memory_filter,
     default_memory_indexes,
     normalize_memory_input,
@@ -316,6 +317,9 @@ class QdrantMCPServer(FastMCP):
                 checks["connection"] = {"ok": False, "error": str(exc)}
 
             exists = False
+            vector_indexed: bool | None = None
+            payload_indexes_ok: bool | None = None
+            optimizer_ok: bool | None = None
             try:
                 exists = await self.qdrant_connector.collection_exists(name)
                 checks["collection_exists"] = {"ok": exists, "collection_name": name}
@@ -328,6 +332,9 @@ class QdrantMCPServer(FastMCP):
             if exists:
                 try:
                     info = await self.qdrant_connector.get_collection_info(name)
+                    optimizer_ok = str(info.optimizer_status).lower() == "ok"
+                    if info.indexed_vectors_count is not None:
+                        vector_indexed = info.points_count == info.indexed_vectors_count
                     checks["collection_status"] = {
                         "ok": True,
                         "status": str(info.status),
@@ -335,11 +342,8 @@ class QdrantMCPServer(FastMCP):
                         "points_count": info.points_count,
                         "indexed_vectors_count": info.indexed_vectors_count,
                         "segments_count": info.segments_count,
+                        "vector_indexed": vector_indexed,
                     }
-                    if info.points_count and info.indexed_vectors_count is not None:
-                        checks["collection_status"]["fully_indexed"] = (
-                            info.points_count == info.indexed_vectors_count
-                        )
                 except Exception as exc:  # pragma: no cover
                     ok = False
                     checks["collection_status"] = {"ok": False, "error": str(exc)}
@@ -362,8 +366,9 @@ class QdrantMCPServer(FastMCP):
                         name
                     )
                     checks["payload_schema"] = {"ok": True, "payload_schema": schema}
-                    expected = set(default_memory_indexes().keys())
+                    expected = set(self.payload_indexes.keys())
                     missing = sorted(expected - set(schema.keys()))
+                    payload_indexes_ok = not missing
                     if missing:
                         state.warnings.append(
                             f"Payload schema missing expected indexes: {missing}"
@@ -371,6 +376,22 @@ class QdrantMCPServer(FastMCP):
                 except Exception as exc:  # pragma: no cover
                     ok = False
                     checks["payload_schema"] = {"ok": False, "error": str(exc)}
+                    payload_indexes_ok = None
+
+                if "collection_status" in checks:
+                    checks["collection_status"]["payload_indexes_ok"] = (
+                        payload_indexes_ok
+                    )
+                    if (
+                        vector_indexed is not None
+                        and payload_indexes_ok is not None
+                        and optimizer_ok is not None
+                    ):
+                        checks["collection_status"]["fully_indexed"] = bool(
+                            vector_indexed and payload_indexes_ok and optimizer_ok
+                        )
+                    else:
+                        checks["collection_status"]["fully_indexed"] = None
 
             warmup: dict[str, Any] = {}
             if warm_all:
@@ -986,6 +1007,116 @@ class QdrantMCPServer(FastMCP):
             }
             return finish_request(state, data)
 
+        async def backfill_memory_contract(
+            ctx: Context,
+            collection_name: Annotated[
+                str, Field(description="Collection to backfill.")
+            ] = "",
+            batch_size: Annotated[
+                int, Field(description="Batch size for scanning.")
+            ] = 100,
+            max_points: Annotated[
+                int | None,
+                Field(description="Max points to scan (None for all)."),
+            ] = None,
+            dry_run: Annotated[
+                bool, Field(description="Report changes without writing.")
+            ] = True,
+            confirm: Annotated[
+                bool, Field(description="Confirm writes when dry_run is false.")
+            ] = False,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "collection_name": collection_name,
+                    "batch_size": batch_size,
+                    "max_points": max_points,
+                    "dry_run": dry_run,
+                    "confirm": confirm,
+                },
+            )
+            if batch_size <= 0:
+                raise ValueError("batch_size must be positive.")
+
+            if not dry_run and not confirm:
+                state.warnings.append("confirm=true required to apply backfill.")
+                data = {
+                    "scanned": 0,
+                    "updated": 0,
+                    "skipped": 0,
+                    "dry_run": True,
+                }
+                return finish_request(state, data)
+
+            collection = resolve_collection_name(collection_name)
+            scanned = 0
+            updated = 0
+            skipped = 0
+            offset = None
+            warning_set: set[str] = set()
+            stop = False
+
+            while True:
+                points, offset = await self.qdrant_connector.scroll_points_page(
+                    collection_name=collection,
+                    limit=batch_size,
+                    with_payload=True,
+                    offset=offset,
+                )
+                if not points:
+                    break
+
+                for point in points:
+                    scanned += 1
+                    if max_points is not None and scanned > max_points:
+                        stop = True
+                        break
+
+                    payload = point.payload or {}
+                    metadata = payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    text = extract_payload_text(payload)
+
+                    patch, patch_warnings = build_memory_backfill_patch(
+                        text=text,
+                        metadata=metadata,
+                        embedding_info=self.embedding_info,
+                        strict=self.memory_settings.strict_params,
+                    )
+                    warning_set.update(patch_warnings)
+
+                    if not patch:
+                        skipped += 1
+                        continue
+
+                    updated += 1
+                    if not dry_run:
+                        merged_metadata = dict(metadata)
+                        merged_metadata.update(patch)
+                        new_payload = dict(payload)
+                        new_payload[METADATA_PATH] = merged_metadata
+                        await self.qdrant_connector.overwrite_payload(
+                            [str(point.id)],
+                            new_payload,
+                            collection_name=collection,
+                        )
+
+                if stop or offset is None:
+                    break
+
+            state.warnings.extend(sorted(warning_set))
+            data = {
+                "collection_name": collection,
+                "scanned": scanned,
+                "updated": updated,
+                "skipped": skipped,
+                "dry_run": dry_run,
+                "next_offset": str(offset) if offset is not None and not stop else None,
+            }
+            if max_points is not None:
+                data["max_points"] = max_points
+            return finish_request(state, data)
+
         async def list_aliases(ctx: Context) -> dict[str, Any]:
             state = new_request(ctx, {})
             aliases = await self.qdrant_connector.list_aliases()
@@ -1202,6 +1333,11 @@ class QdrantMCPServer(FastMCP):
                 ensure_payload_indexes,
                 name="qdrant-ensure-payload-indexes",
                 description="Ensure expected payload indexes exist for a collection.",
+            )
+            self.tool(
+                backfill_memory_contract,
+                name="qdrant-backfill-memory-contract",
+                description="Backfill missing memory contract fields for existing points.",
             )
             self.tool(
                 update_foo,

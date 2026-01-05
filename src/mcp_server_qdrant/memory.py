@@ -611,3 +611,135 @@ def default_memory_indexes() -> dict[str, models.PayloadSchemaType]:
         f"{METADATA_PATH}.expires_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.confidence": models.PayloadSchemaType.FLOAT,
     }
+
+
+def build_memory_backfill_patch(
+    *,
+    text: str | None,
+    metadata: dict[str, Any] | None,
+    embedding_info: EmbeddingInfo,
+    strict: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    patch: dict[str, Any] = {}
+    metadata = dict(metadata or {})
+
+    if not text:
+        if strict:
+            raise ValueError("text is required to backfill memory contract.")
+        warnings.append("missing text; skipping backfill for this point.")
+        return patch, warnings
+
+    now = datetime.now(timezone.utc)
+
+    if "text" not in metadata:
+        patch["text"] = text
+
+    if "type" not in metadata or not isinstance(metadata.get("type"), str):
+        patch["type"] = (
+            metadata.get("type")
+            if isinstance(metadata.get("type"), str)
+            else DEFAULT_MEMORY_TYPE
+        )
+
+    entities = metadata.get("entities")
+    if entities is None:
+        patch["entities"] = []
+    elif not isinstance(entities, list):
+        if strict:
+            raise ValueError("entities must be a list for backfill.")
+        warnings.append("entities coerced to list during backfill.")
+        patch["entities"] = [str(entities)]
+
+    if "source" not in metadata or not isinstance(metadata.get("source"), str):
+        patch["source"] = (
+            metadata.get("source")
+            if isinstance(metadata.get("source"), str)
+            else DEFAULT_SOURCE
+        )
+
+    if "scope" not in metadata or not isinstance(metadata.get("scope"), str):
+        patch["scope"] = (
+            metadata.get("scope")
+            if isinstance(metadata.get("scope"), str)
+            else DEFAULT_SCOPE
+        )
+
+    confidence_raw = metadata.get("confidence")
+    confidence_value = _coerce_float(confidence_raw, "confidence", strict, warnings)
+    if confidence_value is None:
+        patch["confidence"] = DEFAULT_CONFIDENCE
+    elif not isinstance(confidence_raw, (int, float)):
+        patch["confidence"] = confidence_value
+
+    created_at_raw = metadata.get("created_at")
+    created_at = _parse_datetime(created_at_raw, "created_at", strict, warnings)
+    if created_at is None:
+        created_at = now
+        patch["created_at"] = _datetime_to_iso(created_at)
+    elif "created_at" not in metadata:
+        patch["created_at"] = _datetime_to_iso(created_at)
+
+    updated_at_raw = metadata.get("updated_at")
+    updated_at = _parse_datetime(updated_at_raw, "updated_at", strict, warnings)
+    if updated_at is None:
+        updated_at = created_at
+        patch["updated_at"] = _datetime_to_iso(updated_at)
+    elif "updated_at" not in metadata:
+        patch["updated_at"] = _datetime_to_iso(updated_at)
+
+    if updated_at < created_at:
+        warnings.append("updated_at was before created_at; adjusted during backfill.")
+        updated_at = created_at
+        patch["updated_at"] = _datetime_to_iso(updated_at)
+
+    created_at_ts = metadata.get("created_at_ts")
+    if not isinstance(created_at_ts, int):
+        patch["created_at_ts"] = _datetime_to_ms(created_at)
+
+    updated_at_ts = metadata.get("updated_at_ts")
+    if not isinstance(updated_at_ts, int):
+        patch["updated_at_ts"] = _datetime_to_ms(updated_at)
+
+    expires_at_raw = metadata.get("expires_at")
+    expires_at = _parse_datetime(expires_at_raw, "expires_at", strict, warnings)
+    if expires_at is None and isinstance(metadata.get("ttl_days"), int):
+        expires_at = created_at + timedelta(days=int(metadata["ttl_days"]))
+        if "expires_at" not in metadata:
+            patch["expires_at"] = _datetime_to_iso(expires_at)
+    if expires_at is not None:
+        expires_at_ts = metadata.get("expires_at_ts")
+        if not isinstance(expires_at_ts, int):
+            patch["expires_at_ts"] = _datetime_to_ms(expires_at)
+
+    last_seen_at_raw = metadata.get("last_seen_at")
+    last_seen_at = _parse_datetime(last_seen_at_raw, "last_seen_at", strict, warnings)
+    if last_seen_at is None:
+        last_seen_at = updated_at
+        patch["last_seen_at"] = _datetime_to_iso(last_seen_at)
+    elif "last_seen_at" not in metadata:
+        patch["last_seen_at"] = _datetime_to_iso(last_seen_at)
+
+    last_seen_at_ts = metadata.get("last_seen_at_ts")
+    if not isinstance(last_seen_at_ts, int):
+        patch["last_seen_at_ts"] = _datetime_to_ms(last_seen_at)
+
+    reinforcement_count = metadata.get("reinforcement_count")
+    if not isinstance(reinforcement_count, int) or reinforcement_count < 1:
+        patch["reinforcement_count"] = 1
+
+    if not isinstance(metadata.get("text_hash"), str):
+        patch["text_hash"] = compute_text_hash(text)
+
+    if "embedding_provider" not in metadata:
+        patch["embedding_provider"] = embedding_info.provider
+    if "embedding_model" not in metadata:
+        patch["embedding_model"] = embedding_info.model
+    if "embedding_dim" not in metadata or not isinstance(
+        metadata.get("embedding_dim"), int
+    ):
+        patch["embedding_dim"] = embedding_info.dim
+    if "embedding_version" not in metadata:
+        patch["embedding_version"] = embedding_info.version
+
+    return patch, warnings

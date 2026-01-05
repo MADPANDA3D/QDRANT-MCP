@@ -1,6 +1,11 @@
 import pytest
 
-from mcp_server_qdrant.memory import EmbeddingInfo, normalize_memory_input
+from mcp_server_qdrant.memory import (
+    EmbeddingInfo,
+    build_memory_backfill_patch,
+    compute_text_hash,
+    normalize_memory_input,
+)
 
 
 def test_normalize_memory_defaults():
@@ -58,3 +63,74 @@ def test_normalize_memory_chunking():
         assert "chunk_index" in record.metadata
         assert "chunk_count" in record.metadata
         assert "parent_text_hash" in record.metadata
+
+
+def test_backfill_patch_adds_missing_fields():
+    embedding = EmbeddingInfo(provider="openai", model="model", dim=3, version="v1")
+    patch, warnings = build_memory_backfill_patch(
+        text="Hello world",
+        metadata={},
+        embedding_info=embedding,
+        strict=False,
+    )
+    assert patch["text"] == "Hello world"
+    assert patch["type"] == "note"
+    assert patch["entities"] == []
+    assert patch["source"] == "user"
+    assert patch["scope"] == "global"
+    assert "confidence" in patch
+    assert "created_at" in patch
+    assert "updated_at" in patch
+    assert "created_at_ts" in patch
+    assert "updated_at_ts" in patch
+    assert "last_seen_at" in patch
+    assert "last_seen_at_ts" in patch
+    assert patch["text_hash"]
+    assert patch["embedding_provider"] == "openai"
+    assert patch["embedding_model"] == "model"
+    assert patch["embedding_dim"] == 3
+    assert patch["embedding_version"] == "v1"
+    assert warnings == []
+
+
+def test_backfill_patch_preserves_existing_fields():
+    embedding = EmbeddingInfo(provider="openai", model="model", dim=3, version="v1")
+    text = "Hello world"
+    metadata = {
+        "text": text,
+        "type": "person",
+        "entities": ["example"],
+        "source": "import",
+        "scope": "user",
+        "confidence": 0.9,
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "updated_at": "2024-01-02T00:00:00+00:00",
+        "created_at_ts": 1704067200000,
+        "updated_at_ts": 1704153600000,
+        "text_hash": compute_text_hash(text),
+        "embedding_provider": "openai",
+        "embedding_model": "legacy",
+        "embedding_dim": 3,
+        "embedding_version": "v0",
+    }
+    patch, warnings = build_memory_backfill_patch(
+        text=text,
+        metadata=metadata,
+        embedding_info=embedding,
+        strict=False,
+    )
+    assert "type" not in patch
+    assert "entities" not in patch
+    assert "source" not in patch
+    assert "scope" not in patch
+    assert "confidence" not in patch
+    assert "created_at" not in patch
+    assert "updated_at" not in patch
+    assert "created_at_ts" not in patch
+    assert "updated_at_ts" not in patch
+    assert "text_hash" not in patch
+    assert "embedding_provider" not in patch
+    assert "embedding_model" not in patch
+    assert "embedding_dim" not in patch
+    assert "embedding_version" not in patch
+    assert warnings == []

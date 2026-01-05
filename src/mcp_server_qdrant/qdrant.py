@@ -228,6 +228,23 @@ class QdrantConnector:
         limit: int = 10,
         with_payload: bool = True,
     ) -> list[models.Record]:
+        points, _ = await self.scroll_points_page(
+            collection_name=collection_name,
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=with_payload,
+        )
+        return points
+
+    async def scroll_points_page(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+        limit: int = 10,
+        with_payload: bool = True,
+        offset: models.PointId | None = None,
+    ) -> tuple[list[models.Record], models.PointId | None]:
         collection_name = collection_name or self._default_collection_name
         if not collection_name:
             raise ValueError("collection_name is required")
@@ -236,13 +253,19 @@ class QdrantConnector:
             scroll_filter=query_filter,
             limit=limit,
             with_payload=with_payload,
+            offset=offset,
         )
         if isinstance(response, tuple):
-            points, _ = response
-            return points
-        if hasattr(response, "points"):
-            return response.points
-        return response
+            points, next_offset = response
+        elif hasattr(response, "points"):
+            points = response.points
+            next_offset = getattr(response, "next_page_offset", None) or getattr(
+                response, "next_offset", None
+            )
+        else:
+            points = response
+            next_offset = None
+        return points, next_offset
 
     async def retrieve_points(
         self,
