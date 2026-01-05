@@ -18,68 +18,99 @@ It acts as a semantic memory layer on top of the Qdrant database.
 
 ### Tools
 
-1. `qdrant-store`
-   - Store some information in the Qdrant database
+All tool responses include a `meta` object with request telemetry.
+
+1. `qdrant-health-check`
+   - Verify connectivity, collection settings, payload schema, and index status.
    - Input:
-     - `information` (string): Information to store
-     - `metadata` (JSON): Optional metadata to store
+     - `collection_name` (string, optional): Collection to inspect
+     - `warm_all` (boolean, optional): Warm up Qdrant + embedding clients
+   - Returns: Health report with checks and warnings
+2. `qdrant-store`
+   - Store a memory with dedupe/upsert and the memory contract (see below)
+   - Input:
+     - `information` (string): Memory text to store
+     - `metadata` (JSON): Memory metadata (type, entities, source, scope, timestamps, confidence)
+     - `dedupe_action` (string, optional): `update` or `skip`
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
-   - Returns: Confirmation message
-2. `qdrant-find`
-   - Retrieve relevant information from the Qdrant database
+   - Returns: Insert/update/skip results for each stored chunk
+3. `qdrant-find`
+   - Retrieve memories with structured filters and optional MMR diversity
    - Input:
      - `query` (string): Query to use for searching
+     - `memory_filter` (object, optional): Filters for type, entities, scope, source, and date ranges
+     - `query_filter` (object, optional): Arbitrary Qdrant filter (when enabled)
+     - `top_k` (integer, optional): Max results
+     - `use_mmr` (boolean, optional): Enable MMR diversity
+     - `mmr_lambda` (float, optional): MMR trade-off (0-1)
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
-   - Returns: Information stored in the Qdrant database as separate messages
-3. `qdrant-list-collections`
+   - Returns: Results with `id`, `score`, `payload`, and `snippet`
+4. `qdrant-update-point`
+   - Update an existing point (re-embeds content)
+5. `qdrant-patch-payload`
+   - Patch metadata on an existing point
+6. `qdrant-delete-points`
+   - Delete points by id (confirm required)
+7. `qdrant-delete-by-filter`
+   - Delete points by filter (confirm required, dry-run supported)
+8. `qdrant-list-collections`
    - List all Qdrant collections
-4. `qdrant-collection-exists`
+9. `qdrant-collection-exists`
    - Check if a collection exists
    - Input:
      - `collection_name` (string, optional): Collection to check
-5. `qdrant-collection-info`
-   - Get collection details including vectors and payload schema
-   - Input:
-     - `collection_name` (string, optional): Collection to inspect
-6. `qdrant-collection-stats`
-   - Get collection statistics (points, segments, status)
-   - Input:
-     - `collection_name` (string, optional): Collection to inspect
-7. `qdrant-collection-vectors`
-   - List vector names and sizes for a collection
-   - Input:
-     - `collection_name` (string, optional): Collection to inspect
-8. `qdrant-collection-payload-schema`
-   - Get payload schema for a collection
-   - Input:
-     - `collection_name` (string, optional): Collection to inspect
-9. `qdrant-get-vector-name`
-   - Resolve the vector name used by this MCP server
-   - Input:
-     - `collection_name` (string, optional): Collection to inspect
-10. `qdrant-list-aliases`
+10. `qdrant-collection-info`
+    - Get collection details including vectors and payload schema
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+11. `qdrant-collection-stats`
+    - Get collection statistics (points, segments, status)
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+12. `qdrant-collection-vectors`
+    - List vector names and sizes for a collection
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+13. `qdrant-collection-payload-schema`
+    - Get payload schema for a collection
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+14. `qdrant-get-vector-name`
+    - Resolve the vector name used by this MCP server
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+15. `qdrant-list-aliases`
     - List all collection aliases
-11. `qdrant-collection-aliases`
+16. `qdrant-collection-aliases`
     - List aliases for a specific collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-12. `qdrant-collection-cluster-info`
+17. `qdrant-collection-cluster-info`
     - Get cluster info for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-13. `qdrant-list-snapshots`
+18. `qdrant-list-snapshots`
     - List snapshots for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-14. `qdrant-list-full-snapshots`
+19. `qdrant-list-full-snapshots`
     - List full cluster snapshots
-15. `qdrant-list-shard-snapshots`
+20. `qdrant-list-shard-snapshots`
     - List snapshots for a specific shard
     - Input:
       - `collection_name` (string): Collection to inspect
       - `shard_id` (integer): Shard id to list snapshots for
+
+### Memory Contract
+
+Stored memories are normalized to include at least:
+`text`, `type`, `entities`, `source`, `created_at`, `updated_at`, `scope`, `confidence`, and `text_hash`.
+Optional fields include `expires_at` / `ttl_days` plus embedding metadata
+(`embedding_model`, `embedding_dim`, `embedding_provider`, `embedding_version`).
+When a duplicate `text_hash` is found in the same `scope`, the server updates
+`last_seen_at` and `reinforcement_count` instead of inserting a duplicate.
 
 ## Environment Variables
 
@@ -95,12 +126,18 @@ The configuration of the server is done using environment variables:
 | `EMBEDDING_PROVIDER`     | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
 | `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
 | `EMBEDDING_VECTOR_SIZE`  | Vector size override (required for unknown OpenAI models)           | unset                                                             |
+| `EMBEDDING_VERSION`      | Embedding version label stored with each memory                     | unset                                                             |
 | `OPENAI_API_KEY`         | OpenAI API key (required for `openai` provider)                     | unset                                                             |
 | `OPENAI_BASE_URL`        | OpenAI-compatible base URL (optional)                               | unset                                                             |
 | `OPENAI_ORG`             | OpenAI organization ID (optional)                                   | unset                                                             |
 | `OPENAI_PROJECT`         | OpenAI project ID (optional)                                        | unset                                                             |
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
+| `MCP_STRICT_PARAMS`      | Reject unknown keys/filters and oversized text                       | `false`                                                           |
+| `MCP_MAX_TEXT_LENGTH`    | Max text length before chunking                                     | `8000`                                                            |
+| `MCP_DEDUPE_ACTION`      | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
+| `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                            | unset                                                             |
+| `MCP_SERVER_VERSION`     | Optional git SHA for telemetry                                      | unset                                                             |
 
 Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
 

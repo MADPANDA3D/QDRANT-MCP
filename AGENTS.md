@@ -16,6 +16,13 @@ This repository hosts the Qdrant MCP server. Use these notes to keep contributio
 - `COLLECTION_NAME=mcp-dev fastmcp dev src/mcp_server_qdrant/server.py`: dev mode with MCP inspector.
 - `docker build -t mcp-server-qdrant .`: build the container image.
 
+## Docker Runtime (mcp-qdrant)
+- The running MCP uses the `mcp-qdrant` container on the `npm_default` network with no bind mounts, so code changes require a rebuild and restart.
+- After code changes, commit them, then rebuild + restart:
+  - `docker build -t mcp-server-qdrant /root/qdrant-mcp/mcp-server-qdrant`
+  - `docker stop mcp-qdrant && docker rm mcp-qdrant`
+  - `docker run -d --name mcp-qdrant --network npm_default --env-file /root/qdrant-mcp/mcp-server-qdrant/.env mcp-server-qdrant mcp-server-qdrant --transport streamable-http`
+
 ## Coding Style & Naming Conventions
 - Python with 4-space indentation; keep imports grouped and ordered.
 - Formatting via `ruff format`; linting via `ruff` (auto-fix) and `isort --profile black`.

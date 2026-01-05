@@ -66,6 +66,10 @@ class EmbeddingProviderSettings(BaseSettings):
         default=None,
         validation_alias="OPENAI_PROJECT",
     )
+    version: str | None = Field(
+        default=None,
+        validation_alias="EMBEDDING_VERSION",
+    )
 
     @model_validator(mode="after")
     def check_openai_settings(self) -> "EmbeddingProviderSettings":
@@ -147,3 +151,20 @@ class QdrantSettings(BaseSettings):
                     "If 'local_path' is set, 'location' and 'api_key' must be None."
                 )
         return self
+
+
+class MemorySettings(BaseSettings):
+    """
+    Configuration for memory contract normalization and safety guards.
+    """
+
+    strict_params: bool = Field(default=False, validation_alias="MCP_STRICT_PARAMS")
+    max_text_length: int = Field(default=8000, validation_alias="MCP_MAX_TEXT_LENGTH")
+    dedupe_action: Literal["update", "skip"] = Field(
+        default="update",
+        validation_alias="MCP_DEDUPE_ACTION",
+    )
+    health_check_collection: str | None = Field(
+        default=None,
+        validation_alias="MCP_HEALTH_CHECK_COLLECTION",
+    )

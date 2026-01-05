@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Iterable
 
 from pydantic import BaseModel
 from qdrant_client import AsyncQdrantClient, models
@@ -72,7 +72,13 @@ class QdrantConnector:
     async def collection_exists(self, collection_name: str) -> bool:
         return await self._client.collection_exists(collection_name)
 
-    async def store(self, entry: Entry, *, collection_name: str | None = None):
+    async def store(
+        self,
+        entry: Entry,
+        *,
+        collection_name: str | None = None,
+        point_id: str | None = None,
+    ) -> str:
         """
         Store some information in the Qdrant collection, along with the specified metadata.
         :param entry: The entry to store in the Qdrant collection.
@@ -96,16 +102,75 @@ class QdrantConnector:
             vector_payload = embeddings[0]
         else:
             vector_payload = {vector_name: embeddings[0]}
+        point_id = point_id or uuid.uuid4().hex
         await self._client.upsert(
             collection_name=collection_name,
             points=[
                 models.PointStruct(
-                    id=uuid.uuid4().hex,
+                    id=point_id,
                     vector=vector_payload,
                     payload=payload,
                 )
             ],
         )
+        return point_id
+
+    async def search_points(
+        self,
+        query: str,
+        *,
+        collection_name: str | None = None,
+        limit: int = 10,
+        query_filter: models.Filter | None = None,
+        with_vectors: bool = False,
+    ) -> list[models.ScoredPoint]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        collection_exists = await self._client.collection_exists(collection_name)
+        if not collection_exists:
+            return []
+
+        query_vector = await self._embedding_provider.embed_query(query)
+        return await self.query_points(
+            query_vector,
+            collection_name=collection_name,
+            limit=limit,
+            query_filter=query_filter,
+            with_vectors=with_vectors,
+        )
+
+    async def query_points(
+        self,
+        query_vector: list[float],
+        *,
+        collection_name: str | None = None,
+        limit: int = 10,
+        query_filter: models.Filter | None = None,
+        with_vectors: bool = False,
+    ) -> list[models.ScoredPoint]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        collection_exists = await self._client.collection_exists(collection_name)
+        if not collection_exists:
+            return []
+
+        vector_name = await self._resolve_vector_name(collection_name)
+
+        search_kwargs: dict[str, Any] = {
+            "collection_name": collection_name,
+            "query": query_vector,
+            "limit": limit,
+            "query_filter": query_filter,
+            "with_payload": True,
+            "with_vectors": with_vectors,
+        }
+        if vector_name is not None:
+            search_kwargs["using"] = vector_name
+
+        search_results = await self._client.query_points(**search_kwargs)
+        return search_results.points
 
     async def search(
         self,
@@ -132,28 +197,15 @@ class QdrantConnector:
         if not collection_exists:
             return []
 
-        # Embed the query
-        # ToDo: instead of embedding text explicitly, use `models.Document`,
-        # it should unlock usage of server-side inference.
-
-        query_vector = await self._embedding_provider.embed_query(query)
-        vector_name = await self._resolve_vector_name(collection_name)
-
-        # Search in Qdrant
-        search_kwargs: dict[str, Any] = {
-            "collection_name": collection_name,
-            "query": query_vector,
-            "limit": limit,
-            "query_filter": query_filter,
-            "with_payload": True,
-        }
-        if vector_name is not None:
-            search_kwargs["using"] = vector_name
-
-        search_results = await self._client.query_points(**search_kwargs)
+        search_results = await self.search_points(
+            query,
+            collection_name=collection_name,
+            limit=limit,
+            query_filter=query_filter,
+        )
 
         entries: list[Entry] = []
-        for result in search_results.points:
+        for result in search_results:
             payload = result.payload or {}
             content = payload.get("document")
             if content is None:
@@ -167,6 +219,124 @@ class QdrantConnector:
             metadata = payload.get(METADATA_PATH) or payload.get("metadata")
             entries.append(Entry(content=content, metadata=metadata))
         return entries
+
+    async def scroll_points(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+        limit: int = 10,
+        with_payload: bool = True,
+    ) -> list[models.Record]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        response = await self._client.scroll(
+            collection_name=collection_name,
+            scroll_filter=query_filter,
+            limit=limit,
+            with_payload=with_payload,
+        )
+        if isinstance(response, tuple):
+            points, _ = response
+            return points
+        if hasattr(response, "points"):
+            return response.points
+        return response
+
+    async def retrieve_points(
+        self,
+        point_ids: Iterable[str],
+        *,
+        collection_name: str | None = None,
+        with_payload: bool = True,
+    ) -> list[models.Record]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        return await self._client.retrieve(
+            collection_name=collection_name,
+            ids=list(point_ids),
+            with_payload=with_payload,
+        )
+
+    async def set_payload(
+        self,
+        point_ids: Iterable[str],
+        payload: dict[str, Any],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        await self._client.set_payload(
+            collection_name=collection_name,
+            payload=payload,
+            points=list(point_ids),
+        )
+
+    async def overwrite_payload(
+        self,
+        point_ids: Iterable[str],
+        payload: dict[str, Any],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        await self._client.overwrite_payload(
+            collection_name=collection_name,
+            payload=payload,
+            points=list(point_ids),
+        )
+
+    async def count_points(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+    ) -> int:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        response = await self._client.count(
+            collection_name=collection_name,
+            count_filter=query_filter,
+            exact=True,
+        )
+        return response.count
+
+    async def delete_points(
+        self,
+        point_ids: Iterable[str],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        selector = models.PointIdsList(points=list(point_ids))
+        await self._client.delete(
+            collection_name=collection_name,
+            points_selector=selector,
+        )
+
+    async def delete_by_filter(
+        self,
+        query_filter: models.Filter,
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        selector = models.FilterSelector(filter=query_filter)
+        await self._client.delete(
+            collection_name=collection_name,
+            points_selector=selector,
+        )
 
     async def _ensure_collection_exists(self, collection_name: str):
         """

@@ -5,6 +5,7 @@ from mcp_server_qdrant.settings import (
     DEFAULT_TOOL_FIND_DESCRIPTION,
     DEFAULT_TOOL_STORE_DESCRIPTION,
     EmbeddingProviderSettings,
+    MemorySettings,
     QdrantSettings,
     ToolSettings,
 )
@@ -78,6 +79,12 @@ class TestEmbeddingProviderSettings:
         assert settings.provider_type == EmbeddingProviderType.FASTEMBED
         assert settings.model_name == "custom_model"
 
+    def test_embedding_version(self, monkeypatch):
+        """Test loading embedding version from environment variables."""
+        monkeypatch.setenv("EMBEDDING_VERSION", "v1")
+        settings = EmbeddingProviderSettings()
+        assert settings.version == "v1"
+
 
 class TestToolSettings:
     def test_default_values(self):
@@ -107,3 +114,23 @@ class TestToolSettings:
         settings = ToolSettings()
         assert settings.tool_store_description == "Custom store description"
         assert settings.tool_find_description == "Custom find description"
+
+
+class TestMemorySettings:
+    def test_default_values(self):
+        settings = MemorySettings()
+        assert settings.strict_params is False
+        assert settings.max_text_length == 8000
+        assert settings.dedupe_action == "update"
+        assert settings.health_check_collection is None
+
+    def test_custom_values(self, monkeypatch):
+        monkeypatch.setenv("MCP_STRICT_PARAMS", "1")
+        monkeypatch.setenv("MCP_MAX_TEXT_LENGTH", "2048")
+        monkeypatch.setenv("MCP_DEDUPE_ACTION", "skip")
+        monkeypatch.setenv("MCP_HEALTH_CHECK_COLLECTION", "jarvis-knowledge-base")
+        settings = MemorySettings()
+        assert settings.strict_params is True
+        assert settings.max_text_length == 2048
+        assert settings.dedupe_action == "skip"
+        assert settings.health_check_collection == "jarvis-knowledge-base"
