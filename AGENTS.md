@@ -37,6 +37,7 @@ This repository hosts the Qdrant MCP server. Use these notes to keep contributio
 
 ## Commit & Pull Request Guidelines
 - Commit messages are short, imperative summaries; optional `type:` prefix (e.g., `fix:`, `deps:`) and issue/PR number in parentheses when available.
+- Always create the commit message yourself and push changes directly to `main`.
 - PRs should include: what changed, why, how tested (commands), and any new/updated env vars or docs.
 - If configuration changes, update the env var table in `README.md`.
 
