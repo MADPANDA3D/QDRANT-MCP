@@ -322,6 +322,7 @@ class QdrantMCPServer(FastMCP):
             exists = False
             vector_indexed: bool | None = None
             vector_index_coverage: float | None = None
+            unindexed_vectors_count: int | None = None
             payload_indexes_ok: bool | None = None
             optimizer_ok: bool | None = None
             try:
@@ -344,6 +345,9 @@ class QdrantMCPServer(FastMCP):
                             )
                         else:
                             vector_index_coverage = 1.0
+                        unindexed_vectors_count = max(
+                            info.points_count - info.indexed_vectors_count, 0
+                        )
                         vector_indexed = info.points_count == info.indexed_vectors_count
                     checks["collection_status"] = {
                         "ok": True,
@@ -354,6 +358,7 @@ class QdrantMCPServer(FastMCP):
                         "segments_count": info.segments_count,
                         "vector_indexed": vector_indexed,
                         "vector_index_coverage": vector_index_coverage,
+                        "unindexed_vectors_count": unindexed_vectors_count,
                     }
                 except Exception as exc:  # pragma: no cover
                     ok = False
