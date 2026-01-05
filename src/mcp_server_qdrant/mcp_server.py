@@ -223,6 +223,15 @@ class QdrantMCPServer(FastMCP):
                     return value
             return None
 
+        def serialize_model(value: Any) -> Any:
+            if value is None:
+                return None
+            if hasattr(value, "model_dump"):
+                return value.model_dump()
+            if hasattr(value, "dict"):
+                return value.dict()
+            return value
+
         def make_snippet(text: str | None, max_length: int = 160) -> str:
             if not text:
                 return ""
@@ -1007,6 +1016,45 @@ class QdrantMCPServer(FastMCP):
             data = {"collection_name": name, "payload_schema": schema}
             return finish_request(state, data)
 
+        async def optimizer_status(
+            ctx: Context, collection_name: str = ""
+        ) -> dict[str, Any]:
+            state = new_request(ctx, {"collection_name": collection_name})
+            name = resolve_collection_name(collection_name)
+            info = await self.qdrant_connector.get_collection_info(name)
+
+            vector_indexed = None
+            vector_index_coverage = None
+            unindexed_vectors_count = None
+            if info.indexed_vectors_count is not None:
+                if info.points_count and info.points_count > 0:
+                    vector_index_coverage = (
+                        info.indexed_vectors_count / info.points_count
+                    )
+                else:
+                    vector_index_coverage = 1.0
+                unindexed_vectors_count = max(
+                    info.points_count - info.indexed_vectors_count, 0
+                )
+                vector_indexed = info.points_count == info.indexed_vectors_count
+
+            data = {
+                "collection_name": name,
+                "status": str(info.status),
+                "optimizer_status": str(info.optimizer_status),
+                "points_count": info.points_count,
+                "indexed_vectors_count": info.indexed_vectors_count,
+                "segments_count": info.segments_count,
+                "vector_indexed": vector_indexed,
+                "vector_index_coverage": vector_index_coverage,
+                "unindexed_vectors_count": unindexed_vectors_count,
+                "optimizer_config": serialize_model(info.config.optimizer_config),
+                "hnsw_config": serialize_model(info.config.hnsw_config),
+            }
+            if info.warnings:
+                data["warnings"] = [str(warning) for warning in info.warnings]
+            return finish_request(state, data)
+
         async def get_vector_name(
             ctx: Context, collection_name: str = ""
         ) -> dict[str, Any]:
@@ -1017,6 +1065,115 @@ class QdrantMCPServer(FastMCP):
                 "collection_name": name,
                 "vector_name": vector_name,
                 "label": "(default)" if vector_name is None else vector_name,
+            }
+            return finish_request(state, data)
+
+        async def update_optimizer_config(
+            ctx: Context,
+            collection_name: Annotated[
+                str, Field(description="Collection to update optimizer settings for.")
+            ] = "",
+            indexing_threshold: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "Indexing threshold (vectors per segment). "
+                        "Lower values force indexing sooner."
+                    )
+                ),
+            ] = None,
+            max_optimization_threads: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "Maximum optimizer threads. Higher values may increase load."
+                    )
+                ),
+            ] = None,
+            dry_run: Annotated[
+                bool,
+                Field(description="Report planned changes without applying them."),
+            ] = True,
+            confirm: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "Confirm optimizer update when dry_run is false (required)."
+                    )
+                ),
+            ] = False,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "collection_name": collection_name,
+                    "indexing_threshold": indexing_threshold,
+                    "max_optimization_threads": max_optimization_threads,
+                    "dry_run": dry_run,
+                    "confirm": confirm,
+                },
+            )
+            if self.qdrant_settings.read_only:
+                raise ValueError("Server is read-only; optimizer updates are disabled.")
+
+            name = resolve_collection_name(collection_name)
+            info = await self.qdrant_connector.get_collection_info(name)
+            current_config = serialize_model(info.config.optimizer_config)
+
+            requested: dict[str, Any] = {}
+            if indexing_threshold is not None:
+                if indexing_threshold < 0:
+                    raise ValueError("indexing_threshold must be >= 0.")
+                requested["indexing_threshold"] = indexing_threshold
+                if info.points_count and indexing_threshold <= info.points_count:
+                    state.warnings.append(
+                        "indexing_threshold below points_count may increase load."
+                    )
+            if max_optimization_threads is not None:
+                if max_optimization_threads < 0:
+                    raise ValueError("max_optimization_threads must be >= 0.")
+                requested["max_optimization_threads"] = max_optimization_threads
+                if max_optimization_threads > 1:
+                    state.warnings.append(
+                        "max_optimization_threads > 1 may increase load."
+                    )
+
+            if not requested:
+                state.warnings.append("No optimizer config changes requested.")
+                data = {
+                    "collection_name": name,
+                    "dry_run": True,
+                    "current_config": current_config,
+                    "requested_config": requested,
+                }
+                return finish_request(state, data)
+
+            if dry_run or not confirm:
+                if not confirm:
+                    state.warnings.append(
+                        "confirm=true required to apply optimizer changes."
+                    )
+                data = {
+                    "collection_name": name,
+                    "dry_run": True,
+                    "current_config": current_config,
+                    "requested_config": requested,
+                }
+                return finish_request(state, data)
+
+            diff = models.OptimizersConfigDiff(**requested)
+            applied = await self.qdrant_connector.update_optimizer_config(
+                collection_name=name,
+                optimizers_config=diff,
+            )
+            updated = await self.qdrant_connector.get_collection_info(name)
+            data = {
+                "collection_name": name,
+                "dry_run": False,
+                "applied": applied,
+                "requested_config": requested,
+                "optimizer_status": str(updated.optimizer_status),
+                "optimizer_config": serialize_model(updated.config.optimizer_config),
             }
             return finish_request(state, data)
 
@@ -1334,6 +1491,11 @@ class QdrantMCPServer(FastMCP):
             description="Get payload schema for a collection.",
         )
         self.tool(
+            optimizer_status,
+            name="qdrant-optimizer-status",
+            description="Get optimizer config and index coverage for a collection.",
+        )
+        self.tool(
             get_vector_name,
             name="qdrant-get-vector-name",
             description="Resolve the vector name used by this MCP server.",
@@ -1395,6 +1557,15 @@ class QdrantMCPServer(FastMCP):
                 name="qdrant-patch-payload",
                 description="Patch payload metadata for a point.",
             )
+            if self.tool_settings.admin_tools_enabled:
+                self.tool(
+                    update_optimizer_config,
+                    name="qdrant-update-optimizer-config",
+                    description=(
+                        "Update optimizer config (admin; confirm + dry_run=false "
+                        "required)."
+                    ),
+                )
             self.tool(
                 delete_points_foo,
                 name="qdrant-delete-points",

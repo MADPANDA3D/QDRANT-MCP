@@ -92,6 +92,7 @@ class TestToolSettings:
         settings = ToolSettings()
         assert settings.tool_store_description == DEFAULT_TOOL_STORE_DESCRIPTION
         assert settings.tool_find_description == DEFAULT_TOOL_FIND_DESCRIPTION
+        assert settings.admin_tools_enabled is False
 
     def test_custom_store_description(self, monkeypatch):
         """Test loading custom store description from environment variable."""
@@ -114,6 +115,12 @@ class TestToolSettings:
         settings = ToolSettings()
         assert settings.tool_store_description == "Custom store description"
         assert settings.tool_find_description == "Custom find description"
+
+    def test_admin_tools_enabled(self, monkeypatch):
+        """Test loading admin tools flag from environment variable."""
+        monkeypatch.setenv("MCP_ADMIN_TOOLS_ENABLED", "1")
+        settings = ToolSettings()
+        assert settings.admin_tools_enabled is True
 
 
 class TestMemorySettings:

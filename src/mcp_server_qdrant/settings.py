@@ -31,6 +31,10 @@ class ToolSettings(BaseSettings):
         default=DEFAULT_TOOL_FIND_DESCRIPTION,
         validation_alias="TOOL_FIND_DESCRIPTION",
     )
+    admin_tools_enabled: bool = Field(
+        default=False,
+        validation_alias="MCP_ADMIN_TOOLS_ENABLED",
+    )
 
 
 class EmbeddingProviderSettings(BaseSettings):

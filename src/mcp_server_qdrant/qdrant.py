@@ -486,6 +486,22 @@ class QdrantConnector:
 
         return created
 
+    async def update_optimizer_config(
+        self,
+        *,
+        collection_name: str | None = None,
+        optimizers_config: models.OptimizersConfigDiff,
+        timeout: int | None = None,
+    ) -> bool:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        return await self._client.update_collection(
+            collection_name=collection_name,
+            optimizers_config=optimizers_config,
+            timeout=timeout,
+        )
+
     async def get_collection_summary(
         self, collection_name: str | None = None
     ) -> dict[str, Any]:

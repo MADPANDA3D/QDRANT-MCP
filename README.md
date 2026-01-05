@@ -77,11 +77,15 @@ All tool responses include a `meta` object with request telemetry.
     - Get payload schema for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-14. `qdrant-ensure-payload-indexes`
+14. `qdrant-optimizer-status`
+    - Get optimizer config and index coverage for a collection
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+15. `qdrant-ensure-payload-indexes`
     - Create payload indexes for the memory contract (idempotent)
     - Input:
       - `collection_name` (string, optional): Collection to update
-15. `qdrant-backfill-memory-contract`
+16. `qdrant-backfill-memory-contract`
     - Backfill missing memory contract fields for existing points
     - Input:
       - `collection_name` (string, optional): Collection to update
@@ -89,27 +93,35 @@ All tool responses include a `meta` object with request telemetry.
       - `max_points` (integer, optional): Limit scan count
       - `dry_run` (boolean, optional): Report changes without writing
       - `confirm` (boolean, optional): Required when dry_run is false
-16. `qdrant-get-vector-name`
+17. `qdrant-update-optimizer-config`
+    - Admin tool to update optimizer settings (requires `MCP_ADMIN_TOOLS_ENABLED=true`)
+    - Input:
+      - `collection_name` (string, optional): Collection to update
+      - `indexing_threshold` (integer, optional): Lower values force indexing sooner
+      - `max_optimization_threads` (integer, optional): Higher values may increase load
+      - `dry_run` (boolean, optional): Report changes without writing
+      - `confirm` (boolean, optional): Required when dry_run is false
+18. `qdrant-get-vector-name`
     - Resolve the vector name used by this MCP server
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-17. `qdrant-list-aliases`
+19. `qdrant-list-aliases`
     - List all collection aliases
-18. `qdrant-collection-aliases`
+20. `qdrant-collection-aliases`
     - List aliases for a specific collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-19. `qdrant-collection-cluster-info`
+21. `qdrant-collection-cluster-info`
     - Get cluster info for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-20. `qdrant-list-snapshots`
+22. `qdrant-list-snapshots`
     - List snapshots for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-21. `qdrant-list-full-snapshots`
+23. `qdrant-list-full-snapshots`
     - List full cluster snapshots
-22. `qdrant-list-shard-snapshots`
+24. `qdrant-list-shard-snapshots`
     - List snapshots for a specific shard
     - Input:
       - `collection_name` (string): Collection to inspect
@@ -145,6 +157,7 @@ The configuration of the server is done using environment variables:
 | `OPENAI_PROJECT`         | OpenAI project ID (optional)                                        | unset                                                             |
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
+| `MCP_ADMIN_TOOLS_ENABLED` | Enable admin-only tools (optimizer updates)                        | `false`                                                           |
 | `MCP_STRICT_PARAMS`      | Reject unknown keys/filters and oversized text                       | `false`                                                           |
 | `MCP_MAX_TEXT_LENGTH`    | Max text length before chunking                                     | `8000`                                                            |
 | `MCP_DEDUPE_ACTION`      | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
