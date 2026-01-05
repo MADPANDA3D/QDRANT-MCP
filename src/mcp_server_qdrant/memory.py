@@ -296,9 +296,7 @@ def normalize_memory_input(
 
     if len(text) > max_text_length:
         if strict:
-            raise ValueError(
-                f"text length {len(text)} exceeds max {max_text_length}."
-            )
+            raise ValueError(f"text length {len(text)} exceeds max {max_text_length}.")
         warnings.append("text chunked due to size.")
 
     memory_type = raw.get("type")
