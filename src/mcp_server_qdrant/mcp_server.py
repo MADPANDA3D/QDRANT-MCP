@@ -2,7 +2,7 @@ import json
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
 from mcp.types import EmbeddedResource, ImageContent, TextContent
@@ -10,8 +10,8 @@ from pydantic import Field
 from qdrant_client import models
 
 from mcp_server_qdrant.common.filters import make_indexes
-from mcp_server_qdrant.common.telemetry import finish_request, new_request
 from mcp_server_qdrant.common.func_tools import make_partial_function
+from mcp_server_qdrant.common.telemetry import finish_request, new_request
 from mcp_server_qdrant.common.wrap_filters import wrap_filters
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant.embeddings.factory import create_embedding_provider
@@ -26,9 +26,9 @@ from mcp_server_qdrant.memory import (
 )
 from mcp_server_qdrant.qdrant import ArbitraryFilter, Entry, Metadata, QdrantConnector
 from mcp_server_qdrant.settings import (
+    METADATA_PATH,
     EmbeddingProviderSettings,
     MemorySettings,
-    METADATA_PATH,
     QdrantSettings,
     ToolSettings,
 )
@@ -48,8 +48,8 @@ class QdrantMCPServer(FastMCP):
         tool_settings: ToolSettings,
         qdrant_settings: QdrantSettings,
         memory_settings: MemorySettings | None = None,
-        embedding_provider_settings: Optional[EmbeddingProviderSettings] = None,
-        embedding_provider: Optional[EmbeddingProvider] = None,
+        embedding_provider_settings: EmbeddingProviderSettings | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
         name: str = "mcp-server-qdrant",
         instructions: str | None = None,
         **settings: Any,
@@ -68,19 +68,21 @@ class QdrantMCPServer(FastMCP):
                 "Must provide either embedding_provider_settings or embedding_provider"
             )
 
-        self.embedding_provider_settings: Optional[EmbeddingProviderSettings] = None
-        self.embedding_provider: Optional[EmbeddingProvider] = None
+        self.embedding_provider_settings: EmbeddingProviderSettings | None
+        self.embedding_provider: EmbeddingProvider
 
         if embedding_provider_settings:
             self.embedding_provider_settings = embedding_provider_settings
             self.embedding_provider = create_embedding_provider(
                 embedding_provider_settings
             )
-        else:
+        elif embedding_provider:
             self.embedding_provider_settings = None
             self.embedding_provider = embedding_provider
-
-        assert self.embedding_provider is not None, "Embedding provider is required"
+        else:
+            raise ValueError(
+                "Must provide either embedding_provider_settings or embedding_provider"
+            )
         self.embedding_info = self._resolve_embedding_info()
 
         field_indexes = default_memory_indexes()
@@ -167,6 +169,7 @@ class QdrantMCPServer(FastMCP):
         """
         Register the tools in the server.
         """
+
         def resolve_collection_name(collection_name: str) -> str:
             name = collection_name.strip() if collection_name else ""
             if name:
@@ -1120,7 +1123,7 @@ class QdrantMCPServer(FastMCP):
         async def list_aliases(ctx: Context) -> dict[str, Any]:
             state = new_request(ctx, {})
             aliases = await self.qdrant_connector.list_aliases()
-            data = [
+            data: list[dict[str, str]] = [
                 {"alias_name": alias.alias_name, "collection_name": alias.collection_name}
                 for alias in aliases
             ]
@@ -1130,7 +1133,7 @@ class QdrantMCPServer(FastMCP):
             state = new_request(ctx, {"collection_name": collection_name})
             name = resolve_collection_name(collection_name)
             aliases = await self.qdrant_connector.list_collection_aliases(name)
-            data = [
+            data: list[dict[str, str]] = [
                 {"alias_name": alias.alias_name, "collection_name": alias.collection_name}
                 for alias in aliases
             ]
