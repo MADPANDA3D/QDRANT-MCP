@@ -434,6 +434,34 @@ class QdrantConnector:
                 schema[field_name] = str(field_schema)
         return schema
 
+    async def ensure_payload_indexes(
+        self,
+        *,
+        collection_name: str | None = None,
+        indexes: dict[str, models.PayloadSchemaType] | None = None,
+    ) -> dict[str, str]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not indexes:
+            return {}
+
+        info = await self.get_collection_info(collection_name)
+        existing = info.payload_schema or {}
+
+        created: dict[str, str] = {}
+        for field_name, field_schema in indexes.items():
+            if field_name in existing:
+                continue
+            await self._client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+            created[field_name] = str(field_schema)
+
+        return created
+
     async def get_collection_summary(
         self, collection_name: str | None = None
     ) -> dict[str, Any]:

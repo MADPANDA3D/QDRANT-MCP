@@ -84,6 +84,7 @@ class QdrantMCPServer(FastMCP):
 
         field_indexes = default_memory_indexes()
         field_indexes.update(make_indexes(qdrant_settings.filterable_fields_dict()))
+        self.payload_indexes = dict(field_indexes)
 
         self.qdrant_connector = QdrantConnector(
             qdrant_settings.location,
@@ -966,6 +967,25 @@ class QdrantMCPServer(FastMCP):
             }
             return finish_request(state, data)
 
+        async def ensure_payload_indexes(
+            ctx: Context,
+            collection_name: Annotated[
+                str, Field(description="Collection to ensure payload indexes for.")
+            ] = "",
+        ) -> dict[str, Any]:
+            state = new_request(ctx, {"collection_name": collection_name})
+            name = resolve_collection_name(collection_name)
+            created = await self.qdrant_connector.ensure_payload_indexes(
+                collection_name=name,
+                indexes=self.payload_indexes,
+            )
+            data = {
+                "collection_name": name,
+                "created_indexes": created,
+                "created_count": len(created),
+            }
+            return finish_request(state, data)
+
         async def list_aliases(ctx: Context) -> dict[str, Any]:
             state = new_request(ctx, {})
             aliases = await self.qdrant_connector.list_aliases()
@@ -1177,6 +1197,11 @@ class QdrantMCPServer(FastMCP):
                 store_foo,
                 name="qdrant-store",
                 description=self.tool_settings.tool_store_description,
+            )
+            self.tool(
+                ensure_payload_indexes,
+                name="qdrant-ensure-payload-indexes",
+                description="Ensure expected payload indexes exist for a collection.",
             )
             self.tool(
                 update_foo,

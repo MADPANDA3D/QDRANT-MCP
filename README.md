@@ -77,27 +77,31 @@ All tool responses include a `meta` object with request telemetry.
     - Get payload schema for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-14. `qdrant-get-vector-name`
+14. `qdrant-ensure-payload-indexes`
+    - Create payload indexes for the memory contract (idempotent)
+    - Input:
+      - `collection_name` (string, optional): Collection to update
+15. `qdrant-get-vector-name`
     - Resolve the vector name used by this MCP server
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-15. `qdrant-list-aliases`
+16. `qdrant-list-aliases`
     - List all collection aliases
-16. `qdrant-collection-aliases`
+17. `qdrant-collection-aliases`
     - List aliases for a specific collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-17. `qdrant-collection-cluster-info`
+18. `qdrant-collection-cluster-info`
     - Get cluster info for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-18. `qdrant-list-snapshots`
+19. `qdrant-list-snapshots`
     - List snapshots for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-19. `qdrant-list-full-snapshots`
+20. `qdrant-list-full-snapshots`
     - List full cluster snapshots
-20. `qdrant-list-shard-snapshots`
+21. `qdrant-list-shard-snapshots`
     - List snapshots for a specific shard
     - Input:
       - `collection_name` (string): Collection to inspect
