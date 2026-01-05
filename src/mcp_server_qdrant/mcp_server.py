@@ -1060,7 +1060,7 @@ class QdrantMCPServer(FastMCP):
 
             if not dry_run and not confirm:
                 state.warnings.append("confirm=true required to apply backfill.")
-                data = {
+                data: dict[str, Any] = {
                     "scanned": 0,
                     "updated": 0,
                     "skipped": 0,
