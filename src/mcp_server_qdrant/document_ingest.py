@@ -184,8 +184,8 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
 
     if ocr and empty_pages:
         try:
-            from pdf2image import convert_from_bytes  # type: ignore
             import pytesseract  # type: ignore
+            from pdf2image import convert_from_bytes  # type: ignore
         except ImportError:  # pragma: no cover - optional dependency missing
             warnings.append("OCR requested but pdf2image/pytesseract not installed.")
         else:
@@ -197,13 +197,9 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
                         if ocr_text.strip():
                             page_texts[idx] = ocr_text
                         else:
-                            warnings.append(
-                                f"OCR produced no text for page {idx + 1}."
-                            )
+                            warnings.append(f"OCR produced no text for page {idx + 1}.")
                     else:
-                        warnings.append(
-                            f"OCR image missing for page {idx + 1}."
-                        )
+                        warnings.append(f"OCR image missing for page {idx + 1}.")
             except Exception as exc:  # pragma: no cover - OCR errors vary
                 warnings.append(f"OCR failed: {exc}")
 

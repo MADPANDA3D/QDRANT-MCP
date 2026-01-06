@@ -354,9 +354,7 @@ class QdrantMCPServer(FastMCP):
 
             allowed = {"txt", "md", "pdf", "doc", "docx"}
             if candidate not in allowed:
-                raise ValueError(
-                    "file_type must be one of: txt, md, pdf, doc, docx."
-                )
+                raise ValueError("file_type must be one of: txt, md, pdf, doc, docx.")
             return candidate
 
         def parse_base64_payload(value: str) -> bytes:
@@ -774,9 +772,7 @@ class QdrantMCPServer(FastMCP):
                     "text": bool(text),
                     "source_url": source_url,
                     "source_url_headers": (
-                        list(source_url_headers.keys())
-                        if source_url_headers
-                        else None
+                        list(source_url_headers.keys()) if source_url_headers else None
                     ),
                     "doc_id": doc_id,
                     "doc_title": doc_title,
@@ -814,7 +810,9 @@ class QdrantMCPServer(FastMCP):
             if content_base64:
                 file_bytes = parse_base64_payload(content_base64)
                 if source_url:
-                    add_warning("source_url ignored because content_base64 was provided.")
+                    add_warning(
+                        "source_url ignored because content_base64 was provided."
+                    )
                 if source_url_headers:
                     add_warning(
                         "source_url_headers ignored because content_base64 was provided."
@@ -855,7 +853,11 @@ class QdrantMCPServer(FastMCP):
             if resolved_file_type in {"pdf", "doc", "docx"} and file_bytes is None:
                 raise ValueError(f"{resolved_file_type} ingestion requires file bytes.")
 
-            if resolved_file_type in {"txt", "md"} and text is None and file_bytes is None:
+            if (
+                resolved_file_type in {"txt", "md"}
+                and text is None
+                and file_bytes is None
+            ):
                 raise ValueError("txt/md ingestion requires text or file bytes.")
 
             extraction_result = await asyncio.to_thread(
@@ -1007,8 +1009,10 @@ class QdrantMCPServer(FastMCP):
                 if await self.qdrant_connector.collection_exists(collection):
                     doc_id_key = f"{METADATA_PATH}.doc_id"
                     try:
-                        schema = await self.qdrant_connector.get_collection_payload_schema(
-                            collection
+                        schema = (
+                            await self.qdrant_connector.get_collection_payload_schema(
+                                collection
+                            )
                         )
                     except Exception as exc:  # pragma: no cover - transport errors vary
                         add_warning(f"Failed to read payload schema: {exc}")
@@ -1016,17 +1020,21 @@ class QdrantMCPServer(FastMCP):
 
                     if doc_id_key not in schema:
                         try:
-                            created = await self.qdrant_connector.ensure_payload_indexes(
-                                collection_name=collection,
-                                indexes={
-                                    doc_id_key: models.PayloadSchemaType.KEYWORD
-                                },
+                            created = (
+                                await self.qdrant_connector.ensure_payload_indexes(
+                                    collection_name=collection,
+                                    indexes={
+                                        doc_id_key: models.PayloadSchemaType.KEYWORD
+                                    },
+                                )
                             )
                             if doc_id_key in created:
                                 add_warning(
                                     "Created payload index for metadata.doc_id."
                                 )
-                        except Exception as exc:  # pragma: no cover - transport errors vary
+                        except (
+                            Exception
+                        ) as exc:  # pragma: no cover - transport errors vary
                             add_warning(
                                 "Payload index for metadata.doc_id missing and "
                                 "could not be created."
