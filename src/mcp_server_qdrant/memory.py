@@ -46,6 +46,15 @@ OPTIONAL_FIELDS = {
     "updated_at_ts",
     "expires_at_ts",
     "last_seen_at_ts",
+    "doc_id",
+    "doc_title",
+    "doc_hash",
+    "source_url",
+    "file_name",
+    "file_type",
+    "page_start",
+    "page_end",
+    "section_heading",
 }
 
 ALLOWED_MEMORY_KEYS = REQUIRED_FIELDS | OPTIONAL_FIELDS
@@ -55,6 +64,12 @@ FILTER_FIELDS = {
     "entities",
     "scope",
     "source",
+    "doc_id",
+    "doc_title",
+    "source_url",
+    "file_name",
+    "file_type",
+    "section_heading",
     "created_at_from",
     "created_at_to",
     "updated_at_from",
@@ -524,6 +539,12 @@ def build_memory_filter(
     add_match("scope", raw.get("scope"))
     add_match("source", raw.get("source"))
     add_match("text_hash", raw.get("text_hash"))
+    add_match("doc_id", raw.get("doc_id"))
+    add_match("doc_title", raw.get("doc_title"))
+    add_match("source_url", raw.get("source_url"))
+    add_match("file_name", raw.get("file_name"))
+    add_match("file_type", raw.get("file_type"))
+    add_match("section_heading", raw.get("section_heading"))
 
     entities = raw.get("entities")
     if entities is not None:
@@ -602,6 +623,7 @@ def default_memory_indexes() -> dict[str, models.PayloadSchemaType]:
         f"{METADATA_PATH}.type": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.source": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.entities": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.doc_id": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.created_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.updated_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.expires_at_ts": models.PayloadSchemaType.INTEGER,

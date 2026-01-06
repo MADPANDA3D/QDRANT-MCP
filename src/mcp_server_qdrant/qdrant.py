@@ -116,6 +116,49 @@ class QdrantConnector:
         )
         return point_id
 
+    async def store_entries(
+        self,
+        entries: list[Entry],
+        *,
+        collection_name: str | None = None,
+        point_ids: list[str] | None = None,
+    ) -> list[str]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not entries:
+            return []
+        if point_ids is not None and len(point_ids) != len(entries):
+            raise ValueError("point_ids length must match entries length")
+
+        await self._ensure_collection_exists(collection_name)
+
+        embeddings = await self._embedding_provider.embed_documents(
+            [entry.content for entry in entries]
+        )
+        vector_name = await self._resolve_vector_name(collection_name)
+
+        if point_ids is None:
+            point_ids = [uuid.uuid4().hex for _ in entries]
+
+        points: list[models.PointStruct] = []
+        for entry, embedding, point_id in zip(entries, embeddings, point_ids):
+            payload = {"document": entry.content, METADATA_PATH: entry.metadata}
+            if vector_name is None:
+                vector_payload: list[float] | dict[str, list[float]] = embedding
+            else:
+                vector_payload = {vector_name: embedding}
+            points.append(
+                models.PointStruct(
+                    id=point_id,
+                    vector=vector_payload,
+                    payload=payload,
+                )
+            )
+
+        await self._client.upsert(collection_name=collection_name, points=points)
+        return point_ids
+
     async def search_points(
         self,
         query: str,

@@ -35,7 +35,17 @@ All tool responses include a `meta` object with request telemetry.
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
    - Returns: Insert/update/skip results for each stored chunk
-3. `qdrant-find`
+3. `qdrant-ingest-document`
+   - Ingest and chunk documents (txt, md, pdf, doc, docx) into Qdrant
+   - Input:
+     - `content_base64` (string, optional) OR `text` (string, optional) OR `source_url` (string, optional)
+     - `file_name` / `file_type` / `mime_type` (optional): Used to infer the parser
+     - `source_url_headers` (object, optional): Headers for fetching `source_url` (User-Agent, Authorization, etc.)
+     - `doc_id` / `doc_title` / `metadata` (optional): Stored with each chunk
+     - `chunk_size` / `chunk_overlap` / `ocr` / `dedupe_action` (optional)
+   - Returns: `doc_id`, `pages`, `chunks_count`, and warnings
+   - Note: if `metadata.doc_id` isn't indexed, the tool will attempt to create the payload index.
+4. `qdrant-find`
    - Retrieve memories with structured filters and optional MMR diversity
    - Input:
      - `query` (string): Query to use for searching
@@ -47,45 +57,47 @@ All tool responses include a `meta` object with request telemetry.
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
    - Returns: Results with `id`, `score`, `payload`, and `snippet`
-4. `qdrant-update-point`
+5. `qdrant-update-point`
    - Update an existing point (re-embeds content)
-5. `qdrant-patch-payload`
+6. `qdrant-patch-payload`
    - Patch metadata on an existing point
-6. `qdrant-delete-points`
+7. `qdrant-delete-points`
    - Delete points by id (confirm required)
-7. `qdrant-delete-by-filter`
+8. `qdrant-delete-by-filter`
    - Delete points by filter (confirm required, dry-run supported)
-8. `qdrant-list-collections`
-   - List all Qdrant collections
-9. `qdrant-collection-exists`
-   - Check if a collection exists
-   - Input:
-     - `collection_name` (string, optional): Collection to check
-10. `qdrant-collection-info`
+9. `qdrant-delete-document`
+   - Delete all chunks for a document by `doc_id` (confirm required)
+10. `qdrant-list-collections`
+    - List all Qdrant collections
+11. `qdrant-collection-exists`
+    - Check if a collection exists
+    - Input:
+      - `collection_name` (string, optional): Collection to check
+12. `qdrant-collection-info`
     - Get collection details including vectors and payload schema
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-11. `qdrant-collection-stats`
+13. `qdrant-collection-stats`
     - Get collection statistics (points, segments, status)
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-12. `qdrant-collection-vectors`
+14. `qdrant-collection-vectors`
     - List vector names and sizes for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-13. `qdrant-collection-payload-schema`
+15. `qdrant-collection-payload-schema`
     - Get payload schema for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-14. `qdrant-optimizer-status`
+16. `qdrant-optimizer-status`
     - Get optimizer config and index coverage for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-15. `qdrant-ensure-payload-indexes`
+17. `qdrant-ensure-payload-indexes`
     - Create payload indexes for the memory contract (idempotent)
     - Input:
       - `collection_name` (string, optional): Collection to update
-16. `qdrant-backfill-memory-contract`
+18. `qdrant-backfill-memory-contract`
     - Backfill missing memory contract fields for existing points
     - Input:
       - `collection_name` (string, optional): Collection to update
@@ -93,7 +105,7 @@ All tool responses include a `meta` object with request telemetry.
       - `max_points` (integer, optional): Limit scan count
       - `dry_run` (boolean, optional): Report changes without writing
       - `confirm` (boolean, optional): Required when dry_run is false
-17. `qdrant-update-optimizer-config`
+19. `qdrant-update-optimizer-config`
     - Admin tool to update optimizer settings (requires `MCP_ADMIN_TOOLS_ENABLED=true`)
     - Input:
       - `collection_name` (string, optional): Collection to update
@@ -101,27 +113,27 @@ All tool responses include a `meta` object with request telemetry.
       - `max_optimization_threads` (integer, optional): Higher values may increase load
       - `dry_run` (boolean, optional): Report changes without writing
       - `confirm` (boolean, optional): Required when dry_run is false
-18. `qdrant-get-vector-name`
+20. `qdrant-get-vector-name`
     - Resolve the vector name used by this MCP server
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-19. `qdrant-list-aliases`
+21. `qdrant-list-aliases`
     - List all collection aliases
-20. `qdrant-collection-aliases`
+22. `qdrant-collection-aliases`
     - List aliases for a specific collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-21. `qdrant-collection-cluster-info`
+23. `qdrant-collection-cluster-info`
     - Get cluster info for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-22. `qdrant-list-snapshots`
+24. `qdrant-list-snapshots`
     - List snapshots for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-23. `qdrant-list-full-snapshots`
+25. `qdrant-list-full-snapshots`
     - List full cluster snapshots
-24. `qdrant-list-shard-snapshots`
+26. `qdrant-list-shard-snapshots`
     - List snapshots for a specific shard
     - Input:
       - `collection_name` (string): Collection to inspect
@@ -133,6 +145,8 @@ Stored memories are normalized to include at least:
 `text`, `type`, `entities`, `source`, `created_at`, `updated_at`, `scope`, `confidence`, and `text_hash`.
 Optional fields include `expires_at` / `ttl_days` plus embedding metadata
 (`embedding_model`, `embedding_dim`, `embedding_provider`, `embedding_version`).
+Document ingestion stores additional fields such as `doc_id`, `doc_title`, `doc_hash`,
+`source_url`, `file_name`, `file_type`, `page_start`, `page_end`, and `section_heading`.
 When a duplicate `text_hash` is found in the same `scope`, the server updates
 `last_seen_at` and `reinforcement_count` instead of inserting a duplicate.
 

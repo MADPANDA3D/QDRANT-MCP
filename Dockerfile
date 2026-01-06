@@ -2,6 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# System deps for document extraction (PDF OCR + .doc parsing)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    antiword \
+    poppler-utils \
+    tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv for package management
 RUN pip install --no-cache-dir uv
 

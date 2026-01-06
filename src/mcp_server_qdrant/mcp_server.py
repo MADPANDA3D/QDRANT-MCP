@@ -1,8 +1,14 @@
+import asyncio
+import base64
+import hashlib
 import json
 import logging
 import math
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from fastmcp import Context, FastMCP
 from mcp.types import EmbeddedResource, ImageContent, TextContent
@@ -13,6 +19,10 @@ from mcp_server_qdrant.common.filters import make_indexes
 from mcp_server_qdrant.common.func_tools import make_partial_function
 from mcp_server_qdrant.common.telemetry import finish_request, new_request
 from mcp_server_qdrant.common.wrap_filters import wrap_filters
+from mcp_server_qdrant.document_ingest import (
+    chunk_text_with_overlap,
+    extract_document_sections,
+)
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant.embeddings.factory import create_embedding_provider
 from mcp_server_qdrant.memory import (
@@ -21,6 +31,7 @@ from mcp_server_qdrant.memory import (
     MemoryFilterInput,
     build_memory_backfill_patch,
     build_memory_filter,
+    compute_text_hash,
     default_memory_indexes,
     normalize_memory_input,
 )
@@ -299,6 +310,75 @@ class QdrantMCPServer(FastMCP):
                 candidate_indices.remove(best_index)
 
             return [candidates[i][0] for i in selected]
+
+        def normalize_file_type(
+            *,
+            file_type: str | None,
+            file_name: str | None,
+            mime_type: str | None,
+            has_text: bool,
+        ) -> str:
+            mime_map = {
+                "text/plain": "txt",
+                "text/markdown": "md",
+                "application/pdf": "pdf",
+                "application/msword": "doc",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+            }
+
+            candidate = None
+            if file_type:
+                normalized = file_type.strip().lower()
+                if normalized.startswith("."):
+                    normalized = normalized[1:]
+                if "/" in normalized:
+                    normalized = mime_map.get(normalized, normalized)
+                candidate = normalized
+
+            if not candidate and file_name:
+                suffix = Path(file_name).suffix.lower().lstrip(".")
+                if suffix:
+                    candidate = suffix
+
+            if not candidate and mime_type:
+                normalized_mime = mime_type.split(";", 1)[0].strip().lower()
+                candidate = mime_map.get(normalized_mime)
+
+            if not candidate and has_text:
+                candidate = "txt"
+
+            if candidate in {"markdown"}:
+                candidate = "md"
+            if candidate in {"text"}:
+                candidate = "txt"
+
+            allowed = {"txt", "md", "pdf", "doc", "docx"}
+            if candidate not in allowed:
+                raise ValueError(
+                    "file_type must be one of: txt, md, pdf, doc, docx."
+                )
+            return candidate
+
+        def parse_base64_payload(value: str) -> bytes:
+            payload = value.strip()
+            if "base64," in payload:
+                payload = payload.split("base64,", 1)[1]
+            try:
+                return base64.b64decode(payload)
+            except Exception as exc:
+                raise ValueError("content_base64 is not valid base64 data.") from exc
+
+        async def fetch_url_data(
+            url: str, headers: dict[str, str] | None = None
+        ) -> tuple[bytes, str | None]:
+            def _fetch() -> tuple[bytes, str | None]:
+                request = Request(url, headers=headers or {})
+                with urlopen(request, timeout=30) as response:
+                    data = response.read()
+                    content_type = response.headers.get("Content-Type")
+                return data, content_type
+
+            return await asyncio.to_thread(_fetch)
 
         async def health_check(
             ctx: Context,
@@ -599,6 +679,421 @@ class QdrantMCPServer(FastMCP):
                 "dedupe_action": action,
                 "results": results,
             }
+            return finish_request(state, data)
+
+        async def ingest_document(
+            ctx: Context,
+            collection_name: Annotated[
+                str, Field(description="The collection to store the document in")
+            ],
+            file_name: Annotated[
+                str | None,
+                Field(
+                    description="Original file name (used to infer file type and title)."
+                ),
+            ] = None,
+            file_type: Annotated[
+                str | None,
+                Field(description="File type/extension: txt, md, pdf, doc, docx."),
+            ] = None,
+            mime_type: Annotated[
+                str | None,
+                Field(description="Optional MIME type for file type inference."),
+            ] = None,
+            content_base64: Annotated[
+                str | None,
+                Field(description="Base64-encoded file content."),
+            ] = None,
+            text: Annotated[
+                str | None,
+                Field(description="Raw text content (for txt/md uploads)."),
+            ] = None,
+            source_url: Annotated[
+                str | None,
+                Field(description="URL to fetch the document from."),
+            ] = None,
+            source_url_headers: Annotated[
+                dict[str, str] | None,
+                Field(
+                    description=(
+                        "Optional headers to use when fetching source_url "
+                        "(e.g., User-Agent, Authorization)."
+                    )
+                ),
+            ] = None,
+            doc_id: Annotated[
+                str | None,
+                Field(description="Document id for update/delete workflows."),
+            ] = None,
+            doc_title: Annotated[
+                str | None,
+                Field(description="Document title stored with each chunk."),
+            ] = None,
+            metadata: Annotated[
+                Metadata | None,
+                Field(
+                    description=(
+                        "Base memory metadata overrides (type, entities, source, scope,"
+                        " confidence, etc.)."
+                    )
+                ),
+            ] = None,
+            chunk_size: Annotated[
+                int | None,
+                Field(
+                    description="Chunk size in characters (defaults to MCP_MAX_TEXT_LENGTH)."
+                ),
+            ] = None,
+            chunk_overlap: Annotated[
+                int | None,
+                Field(description="Chunk overlap in characters (default 200)."),
+            ] = None,
+            ocr: Annotated[
+                bool,
+                Field(description="Enable OCR for PDF pages without text."),
+            ] = False,
+            dedupe_action: Annotated[
+                str | None,
+                Field(
+                    description="How to handle existing doc_id: update or skip. Defaults to MCP_DEDUPE_ACTION."
+                ),
+            ] = None,
+            return_chunk_ids: Annotated[
+                bool,
+                Field(description="Return IDs for the stored chunks."),
+            ] = False,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "collection_name": collection_name,
+                    "file_name": file_name,
+                    "file_type": file_type,
+                    "mime_type": mime_type,
+                    "content_base64": bool(content_base64),
+                    "text": bool(text),
+                    "source_url": source_url,
+                    "source_url_headers": (
+                        list(source_url_headers.keys())
+                        if source_url_headers
+                        else None
+                    ),
+                    "doc_id": doc_id,
+                    "doc_title": doc_title,
+                    "metadata": metadata,
+                    "chunk_size": chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                    "ocr": ocr,
+                    "dedupe_action": dedupe_action,
+                    "return_chunk_ids": return_chunk_ids,
+                },
+            )
+
+            warning_set: set[str] = set()
+
+            def add_warning(message: str) -> None:
+                if message not in warning_set:
+                    warning_set.add(message)
+                    state.warnings.append(message)
+
+            if not content_base64 and not text and not source_url:
+                raise ValueError(
+                    "Provide content_base64, text, or source_url for ingestion."
+                )
+
+            if content_base64 and text:
+                add_warning(
+                    "Both content_base64 and text provided; using content_base64."
+                )
+
+            if file_name is not None:
+                file_name = file_name.strip() or None
+
+            fetched_mime = None
+            file_bytes = None
+            if content_base64:
+                file_bytes = parse_base64_payload(content_base64)
+                if source_url:
+                    add_warning("source_url ignored because content_base64 was provided.")
+                if source_url_headers:
+                    add_warning(
+                        "source_url_headers ignored because content_base64 was provided."
+                    )
+            elif source_url:
+                if text:
+                    add_warning("text ignored because source_url was provided.")
+                resolved_headers = {
+                    "User-Agent": "Mozilla/5.0 (compatible; mcp-server-qdrant)",
+                    "Accept": "*/*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                }
+                if source_url_headers:
+                    for key, value in source_url_headers.items():
+                        if not isinstance(key, str) or not isinstance(value, str):
+                            add_warning("source_url_headers coerced to strings.")
+                            key = str(key)
+                            value = str(value)
+                        resolved_headers[key] = value
+                file_bytes, fetched_mime = await fetch_url_data(
+                    source_url, headers=resolved_headers
+                )
+
+            if source_url and not file_name:
+                parsed_url = urlparse(source_url)
+                if parsed_url.path:
+                    parsed_name = Path(parsed_url.path).name
+                    file_name = parsed_name or file_name
+
+            resolved_mime = mime_type or fetched_mime
+            resolved_file_type = normalize_file_type(
+                file_type=file_type,
+                file_name=file_name,
+                mime_type=resolved_mime,
+                has_text=bool(text),
+            )
+
+            if resolved_file_type in {"pdf", "doc", "docx"} and file_bytes is None:
+                raise ValueError(f"{resolved_file_type} ingestion requires file bytes.")
+
+            if resolved_file_type in {"txt", "md"} and text is None and file_bytes is None:
+                raise ValueError("txt/md ingestion requires text or file bytes.")
+
+            extraction_result = await asyncio.to_thread(
+                extract_document_sections,
+                resolved_file_type,
+                text=text,
+                data=file_bytes,
+                ocr=ocr,
+            )
+            for warning in extraction_result.warnings:
+                add_warning(warning)
+
+            doc_text = "\n\n".join(
+                section.text for section in extraction_result.sections if section.text
+            ).strip()
+
+            if file_bytes:
+                doc_hash = hashlib.sha256(file_bytes).hexdigest()
+            else:
+                doc_hash = hashlib.sha256(doc_text.encode("utf-8")).hexdigest()
+
+            base_metadata = dict(metadata or {})
+            resolved_doc_id = doc_id or base_metadata.get("doc_id") or doc_hash
+            resolved_doc_title = doc_title or base_metadata.get("doc_title")
+            if not resolved_doc_title:
+                resolved_doc_title = (
+                    extraction_result.title_hint
+                    or (Path(file_name).stem if file_name else None)
+                    or "document"
+                )
+
+            if not extraction_result.sections:
+                data = {
+                    "status": "no_text_extracted",
+                    "collection_name": resolve_collection_name(collection_name),
+                    "doc_id": resolved_doc_id,
+                    "doc_title": resolved_doc_title,
+                    "doc_hash": doc_hash,
+                    "file_name": file_name,
+                    "file_type": resolved_file_type,
+                    "source_url": source_url,
+                    "pages": extraction_result.page_count,
+                    "chunks_count": 0,
+                    "warnings": list(warning_set),
+                }
+                return finish_request(state, data)
+
+            base_metadata.setdefault("type", "document")
+            base_metadata.setdefault("source", "document")
+            base_metadata.setdefault("scope", resolved_doc_id)
+            base_metadata.setdefault("entities", [])
+            base_metadata.setdefault("confidence", 0.5)
+
+            base_metadata["doc_id"] = resolved_doc_id
+            base_metadata["doc_title"] = resolved_doc_title
+            base_metadata["doc_hash"] = doc_hash
+            base_metadata["file_type"] = resolved_file_type
+            if source_url:
+                base_metadata["source_url"] = source_url
+            if file_name:
+                base_metadata["file_name"] = file_name
+
+            resolved_chunk_size = chunk_size or self.memory_settings.max_text_length
+            if resolved_chunk_size <= 0:
+                raise ValueError("chunk_size must be positive.")
+            resolved_overlap = 200 if chunk_overlap is None else chunk_overlap
+            if resolved_overlap < 0:
+                raise ValueError("chunk_overlap must be >= 0.")
+            if resolved_overlap >= resolved_chunk_size:
+                add_warning("chunk_overlap reduced to chunk_size - 1.")
+                resolved_overlap = max(0, resolved_chunk_size - 1)
+
+            chunk_specs: list[dict[str, Any]] = []
+            for section in extraction_result.sections:
+                for chunk in chunk_text_with_overlap(
+                    section.text, resolved_chunk_size, resolved_overlap
+                ):
+                    if not chunk:
+                        continue
+                    chunk_specs.append(
+                        {
+                            "text": chunk,
+                            "page_start": section.page_start,
+                            "page_end": section.page_end,
+                            "section_heading": section.section_heading,
+                        }
+                    )
+
+            if not chunk_specs:
+                add_warning("No non-empty chunks produced from document.")
+                data = {
+                    "status": "no_chunks",
+                    "collection_name": resolve_collection_name(collection_name),
+                    "doc_id": resolved_doc_id,
+                    "doc_title": resolved_doc_title,
+                    "doc_hash": doc_hash,
+                    "file_name": file_name,
+                    "file_type": resolved_file_type,
+                    "source_url": source_url,
+                    "pages": extraction_result.page_count,
+                    "chunks_count": 0,
+                    "warnings": list(warning_set),
+                }
+                return finish_request(state, data)
+
+            chunk_count = len(chunk_specs)
+            parent_text_hash = compute_text_hash(doc_text) if chunk_count > 1 else None
+
+            entries: list[Entry] = []
+            for index, spec in enumerate(chunk_specs):
+                chunk_metadata = dict(base_metadata)
+                if chunk_count > 1:
+                    chunk_metadata["chunk_index"] = index
+                    chunk_metadata["chunk_count"] = chunk_count
+                    if parent_text_hash:
+                        chunk_metadata["parent_text_hash"] = parent_text_hash
+                if spec.get("page_start") is not None:
+                    chunk_metadata["page_start"] = spec["page_start"]
+                if spec.get("page_end") is not None:
+                    chunk_metadata["page_end"] = spec["page_end"]
+                if spec.get("section_heading"):
+                    chunk_metadata["section_heading"] = spec["section_heading"]
+
+                records, warnings = normalize_memory_input(
+                    information=spec["text"],
+                    metadata=chunk_metadata,
+                    memory=None,
+                    embedding_info=self.embedding_info,
+                    strict=self.memory_settings.strict_params,
+                    max_text_length=max(resolved_chunk_size, len(spec["text"])),
+                )
+                for warning in warnings:
+                    add_warning(warning)
+                for record in records:
+                    entries.append(Entry(content=record.text, metadata=record.metadata))
+
+            action = (dedupe_action or self.memory_settings.dedupe_action).lower()
+            if action not in {"update", "skip"}:
+                if self.memory_settings.strict_params:
+                    raise ValueError("dedupe_action must be 'update' or 'skip'.")
+                add_warning(f"Unknown dedupe_action '{action}', defaulted to update.")
+                action = "update"
+
+            collection = resolve_collection_name(collection_name)
+            existing_count = 0
+            deleted_existing = False
+            skip_doc_filter = False
+            if resolved_doc_id:
+                if await self.qdrant_connector.collection_exists(collection):
+                    doc_id_key = f"{METADATA_PATH}.doc_id"
+                    try:
+                        schema = await self.qdrant_connector.get_collection_payload_schema(
+                            collection
+                        )
+                    except Exception as exc:  # pragma: no cover - transport errors vary
+                        add_warning(f"Failed to read payload schema: {exc}")
+                        schema = {}
+
+                    if doc_id_key not in schema:
+                        try:
+                            created = await self.qdrant_connector.ensure_payload_indexes(
+                                collection_name=collection,
+                                indexes={
+                                    doc_id_key: models.PayloadSchemaType.KEYWORD
+                                },
+                            )
+                            if doc_id_key in created:
+                                add_warning(
+                                    "Created payload index for metadata.doc_id."
+                                )
+                        except Exception as exc:  # pragma: no cover - transport errors vary
+                            add_warning(
+                                "Payload index for metadata.doc_id missing and "
+                                "could not be created."
+                            )
+                            add_warning(f"doc_id dedupe skipped: {exc}")
+                            skip_doc_filter = True
+
+                    if skip_doc_filter:
+                        doc_filter = None
+                    else:
+                        doc_filter = models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key=doc_id_key,
+                                    match=models.MatchValue(value=resolved_doc_id),
+                                )
+                            ]
+                        )
+                    if doc_filter is not None:
+                        existing_count = await self.qdrant_connector.count_points(
+                            collection_name=collection,
+                            query_filter=doc_filter,
+                        )
+                        if existing_count > 0:
+                            if action == "skip":
+                                data = {
+                                    "status": "skipped",
+                                    "collection_name": collection,
+                                    "doc_id": resolved_doc_id,
+                                    "doc_title": resolved_doc_title,
+                                    "doc_hash": doc_hash,
+                                    "file_name": file_name,
+                                    "file_type": resolved_file_type,
+                                    "source_url": source_url,
+                                    "pages": extraction_result.page_count,
+                                    "chunks_count": 0,
+                                    "existing_count": existing_count,
+                                    "warnings": list(warning_set),
+                                }
+                                return finish_request(state, data)
+                            await self.qdrant_connector.delete_by_filter(
+                                doc_filter, collection_name=collection
+                            )
+                            deleted_existing = True
+
+            point_ids = await self.qdrant_connector.store_entries(
+                entries, collection_name=collection
+            )
+
+            data = {
+                "status": "ingested",
+                "collection_name": collection,
+                "doc_id": resolved_doc_id,
+                "doc_title": resolved_doc_title,
+                "doc_hash": doc_hash,
+                "file_name": file_name,
+                "file_type": resolved_file_type,
+                "source_url": source_url,
+                "pages": extraction_result.page_count,
+                "chunks_count": chunk_count,
+                "dedupe_action": action,
+                "existing_count": existing_count,
+                "replaced_existing": deleted_existing,
+                "warnings": list(warning_set),
+            }
+            if return_chunk_ids:
+                data["chunk_ids"] = point_ids
             return finish_request(state, data)
 
         async def find(
@@ -954,6 +1449,65 @@ class QdrantMCPServer(FastMCP):
                 collection_name=collection,
             )
             data = {"matched": matched, "deleted": matched, "dry_run": False}
+            return finish_request(state, data)
+
+        async def delete_document(
+            ctx: Context,
+            doc_id: Annotated[str, Field(description="Document id to delete.")],
+            collection_name: Annotated[
+                str, Field(description="The collection containing the document.")
+            ],
+            confirm: Annotated[
+                bool, Field(description="Confirm deletion (required).")
+            ] = False,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "doc_id": doc_id,
+                    "collection_name": collection_name,
+                    "confirm": confirm,
+                },
+            )
+            if not doc_id:
+                raise ValueError("doc_id cannot be empty.")
+
+            collection = resolve_collection_name(collection_name)
+            doc_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key=f"{METADATA_PATH}.doc_id",
+                        match=models.MatchValue(value=doc_id),
+                    )
+                ]
+            )
+            matched = await self.qdrant_connector.count_points(
+                collection_name=collection,
+                query_filter=doc_filter,
+            )
+
+            if not confirm:
+                state.warnings.append("confirm=true required to delete document.")
+                data = {
+                    "doc_id": doc_id,
+                    "collection_name": collection,
+                    "matched": matched,
+                    "deleted": 0,
+                    "dry_run": True,
+                }
+                return finish_request(state, data)
+
+            await self.qdrant_connector.delete_by_filter(
+                doc_filter,
+                collection_name=collection,
+            )
+            data = {
+                "doc_id": doc_id,
+                "collection_name": collection,
+                "matched": matched,
+                "deleted": matched,
+                "dry_run": False,
+            }
             return finish_request(state, data)
 
         async def list_collections(ctx: Context) -> dict[str, Any]:
@@ -1538,6 +2092,13 @@ class QdrantMCPServer(FastMCP):
                 description=self.tool_settings.tool_store_description,
             )
             self.tool(
+                ingest_document,
+                name="qdrant-ingest-document",
+                description=(
+                    "Ingest documents (txt, md, pdf, doc, docx) by extracting text and storing chunks."
+                ),
+            )
+            self.tool(
                 ensure_payload_indexes,
                 name="qdrant-ensure-payload-indexes",
                 description="Ensure expected payload indexes exist for a collection.",
@@ -1575,4 +2136,9 @@ class QdrantMCPServer(FastMCP):
                 delete_filter_foo,
                 name="qdrant-delete-by-filter",
                 description="Delete points by filter (confirm required).",
+            )
+            self.tool(
+                delete_document,
+                name="qdrant-delete-document",
+                description="Delete all chunks for a document by doc_id (confirm required).",
             )
