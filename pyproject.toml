@@ -1,6 +1,6 @@
 [project]
-name = "mcp-server-qdrant"
-version = "0.8.1"
+name = "mad-mcp-qdrant"
+dynamic = ["version"]
 description = "MCP server for retrieving context from a Qdrant vector database"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.uv]
@@ -35,6 +35,13 @@ dev-dependencies = [
 
 [project.scripts]
 mcp-server-qdrant = "mcp_server_qdrant.main:main"
+mad-mcp-qdrant = "mcp_server_qdrant.main:main"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/mcp_server_qdrant/__init__.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

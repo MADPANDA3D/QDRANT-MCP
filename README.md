@@ -85,6 +85,15 @@
 ## Quickstart
 
 <details>
+<summary>Install (pip)</summary>
+
+```bash
+pip install mad-mcp-qdrant
+```
+
+</details>
+
+<details>
 <summary>Run with Docker</summary>
 
 ```bash
@@ -100,8 +109,10 @@ docker run -d --name mcp-qdrant \
 <summary>Run locally (uvx)</summary>
 
 ```bash
-QDRANT_URL=... COLLECTION_NAME=... uvx mcp-server-qdrant
+QDRANT_URL=... COLLECTION_NAME=... uvx mad-mcp-qdrant
 ```
+
+Prefer `mad-mcp-qdrant`; `mcp-server-qdrant` remains as a compatible alias.
 
 </details>
 
