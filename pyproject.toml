@@ -43,6 +43,9 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/mcp_server_qdrant/__init__.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_server_qdrant"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
