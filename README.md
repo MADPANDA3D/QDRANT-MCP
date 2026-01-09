@@ -112,70 +112,70 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 <details>
 <summary>Core Memory Tools</summary>
 
-- `qdrant-store`
-- `qdrant-ingest-with-validation`
-- `qdrant-ingest-document`
-- `qdrant-find`
-- `qdrant-update-point`
-- `qdrant-patch-payload`
-- `qdrant-list-points`
-- `qdrant-get-points`
-- `qdrant-count-points`
+- `qdrant-store`: store a single memory point with metadata.
+- `qdrant-ingest-with-validation`: validate inputs, optionally quarantine, then store.
+- `qdrant-ingest-document`: chunk a document and store as multiple points.
+- `qdrant-find`: query vectors with filters and return matches.
+- `qdrant-update-point`: update payload fields for a point id.
+- `qdrant-patch-payload`: patch specific payload keys for a point id.
+- `qdrant-list-points`: scroll point ids in a collection with filters.
+- `qdrant-get-points`: fetch points by id list with payload/vectors.
+- `qdrant-count-points`: count points that match optional filters.
 
 </details>
 
 <details>
 <summary>Housekeeping + Quality</summary>
 
-- `qdrant-audit-memories`
-- `qdrant-backfill-memory-contract`
-- `qdrant-bulk-patch`
-- `qdrant-dedupe-memories`
-- `qdrant-find-near-duplicates`
-- `qdrant-merge-duplicates`
-- `qdrant-reembed-points`
-- `qdrant-expire-memories`
-- `qdrant-delete-points`
-- `qdrant-delete-by-filter`
-- `qdrant-delete-document`
+- `qdrant-audit-memories`: scan for missing fields, bad payloads, and duplicates.
+- `qdrant-backfill-memory-contract`: populate missing metadata fields at scale.
+- `qdrant-bulk-patch`: patch payloads in bulk by filter or ids (dry-run supported).
+- `qdrant-dedupe-memories`: dedupe exact matches by hash.
+- `qdrant-find-near-duplicates`: cluster semantic near-duplicates.
+- `qdrant-merge-duplicates`: merge duplicate groups into a canonical point.
+- `qdrant-reembed-points`: recompute embeddings for selected points.
+- `qdrant-expire-memories`: delete/archive memories past `expires_at_ts`.
+- `qdrant-delete-points`: delete points by id list.
+- `qdrant-delete-by-filter`: delete points that match a filter.
+- `qdrant-delete-document`: delete all chunks for a document id.
 
 </details>
 
 <details>
 <summary>Jobs + Progress</summary>
 
-- `qdrant-submit-job`
-- `qdrant-job-status`
-- `qdrant-job-progress`
-- `qdrant-job-logs`
-- `qdrant-job-result`
-- `qdrant-cancel-job`
+- `qdrant-submit-job`: start a background maintenance job.
+- `qdrant-job-status`: get job status and summary.
+- `qdrant-job-progress`: read progress counters and phase.
+- `qdrant-job-logs`: tail recent logs for a job.
+- `qdrant-job-result`: fetch the final job result.
+- `qdrant-cancel-job`: cancel a running job.
 
 </details>
 
 <details>
 <summary>Collection + Admin</summary>
 
-- `qdrant-health-check`
-- `qdrant-metrics-snapshot`
-- `qdrant-ensure-payload-indexes`
-- `qdrant-optimizer-status`
-- `qdrant-update-optimizer-config`
-- `qdrant-list-collections`
-- `qdrant-collection-exists`
-- `qdrant-collection-info`
-- `qdrant-collection-stats`
-- `qdrant-collection-vectors`
-- `qdrant-collection-payload-schema`
-- `qdrant-get-vector-name`
-- `qdrant-list-aliases`
-- `qdrant-collection-aliases`
-- `qdrant-collection-cluster-info`
-- `qdrant-list-snapshots`
-- `qdrant-list-full-snapshots`
-- `qdrant-list-shard-snapshots`
-- `qdrant-create-snapshot`
-- `qdrant-restore-snapshot`
+- `qdrant-health-check`: validate collection health and expected indexes.
+- `qdrant-metrics-snapshot`: capture collection metrics and index coverage.
+- `qdrant-ensure-payload-indexes`: create missing payload indexes.
+- `qdrant-optimizer-status`: report optimizer and segment status.
+- `qdrant-update-optimizer-config`: update optimizer settings (admin).
+- `qdrant-list-collections`: list all collections.
+- `qdrant-collection-exists`: check if a collection exists.
+- `qdrant-collection-info`: fetch collection config and metadata.
+- `qdrant-collection-stats`: read collection stats (points, segments).
+- `qdrant-collection-vectors`: show vector config for the collection.
+- `qdrant-collection-payload-schema`: list payload schema + indexed fields.
+- `qdrant-get-vector-name`: resolve the active vector name.
+- `qdrant-list-aliases`: list all aliases.
+- `qdrant-collection-aliases`: list aliases for a collection.
+- `qdrant-collection-cluster-info`: cluster and shard info.
+- `qdrant-list-snapshots`: list collection snapshots.
+- `qdrant-list-full-snapshots`: list full snapshots on the server.
+- `qdrant-list-shard-snapshots`: list shard snapshots for a collection.
+- `qdrant-create-snapshot`: create a new collection snapshot.
+- `qdrant-restore-snapshot`: restore a snapshot into a collection.
 
 </details>
 
