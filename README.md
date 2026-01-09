@@ -3,13 +3,6 @@
 <p align="center">
   <img src="assets/brand/header.jpg" alt="MADPANDA3D QDRANT MCP header" />
 </p>
-<p align="center">
-  <img src="assets/brand/logo.jpeg" alt="MADPANDA3D logo" width="140" />
-</p>
-
-<p align="center">
-  <strong>Manage your Vector Database how you see fit</strong>
-</p>
 
 <p align="center">
   <a href="https://github.com/MADPANDA3D/QDRANT-MCP/actions/workflows/pre-commit.yaml">
@@ -26,8 +19,13 @@
   </a>
 </p>
 
-MADPANDA3D QDRANT MCP is a Model Context Protocol (MCP) server that gives agents a full toolkit
-for storing, searching, validating, and maintaining Qdrant vector memories at scale.
+<p align="center">
+  <strong>Manage your Vector Database how you see fit</strong>
+</p>
+<p align="center">
+  A production-ready MCP server for Qdrant that gives your agents a full toolkit to
+  store, search, validate, and maintain vector memories at scale.
+</p>
 
 ## Deploy
 
@@ -203,3 +201,10 @@ release workflow, and a release is created only when commit messages warrant a v
 ## License
 
 MIT
+
+<p align="center">
+  <img src="assets/brand/logo.jpeg" alt="MADPANDA3D logo" width="140" />
+</p>
+<p align="center">
+  <strong>MADPANDA3D</strong>
+</p>
