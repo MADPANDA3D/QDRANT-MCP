@@ -32,9 +32,9 @@ from mcp_server_qdrant.memory import (
     DEFAULT_MEMORY_TYPE,
     DEFAULT_SCOPE,
     DEFAULT_SOURCE,
+    REQUIRED_FIELDS,
     EmbeddingInfo,
     MemoryFilterInput,
-    REQUIRED_FIELDS,
     build_memory_backfill_patch,
     build_memory_filter,
     compute_text_hash,
@@ -309,7 +309,9 @@ class QdrantMCPServer(FastMCP):
             if isinstance(value, list):
                 if len(value) <= DRY_RUN_MAX_LIST_ITEMS:
                     return [compact_value(item) for item in value]
-                trimmed = [compact_value(item) for item in value[:DRY_RUN_MAX_LIST_ITEMS]]
+                trimmed = [
+                    compact_value(item) for item in value[:DRY_RUN_MAX_LIST_ITEMS]
+                ]
                 trimmed.append(f"...(+{len(value) - DRY_RUN_MAX_LIST_ITEMS})")
                 return trimmed
             return value
@@ -350,9 +352,7 @@ class QdrantMCPServer(FastMCP):
                 "sample_limit": sample_limit,
                 "samples": [],
                 "id_sample": [],
-                "group_counts": {
-                    field: {} for field in DRY_RUN_GROUP_FIELDS
-                },
+                "group_counts": {field: {} for field in DRY_RUN_GROUP_FIELDS},
                 "action_counts": {},
                 "affected": 0,
             }
@@ -638,9 +638,7 @@ class QdrantMCPServer(FastMCP):
                 if value is None or value == "":
                     missing_required.append(field)
             if missing_required:
-                errors.append(
-                    f"Missing required fields: {sorted(missing_required)}."
-                )
+                errors.append(f"Missing required fields: {sorted(missing_required)}.")
 
             try:
                 normalize_memory_input(
@@ -1034,9 +1032,7 @@ class QdrantMCPServer(FastMCP):
 
         async def ingest_with_validation(
             ctx: Context,
-            information: Annotated[
-                str, Field(description="Text to store.")
-            ],
+            information: Annotated[str, Field(description="Text to store.")],
             collection_name: Annotated[
                 str, Field(description="The collection to store the information in")
             ],
@@ -1052,7 +1048,9 @@ class QdrantMCPServer(FastMCP):
             ] = None,
             on_invalid: Annotated[
                 str | None,
-                Field(description="What to do if validation fails: allow, reject, quarantine."),
+                Field(
+                    description="What to do if validation fails: allow, reject, quarantine."
+                ),
             ] = None,
             quarantine_collection: Annotated[
                 str | None,
@@ -1939,20 +1937,29 @@ class QdrantMCPServer(FastMCP):
                     payload = point.payload or {}
                     if not payload:
                         missing_payload += 1
-                        if include_samples and len(samples["missing_payload"]) < sample_limit:
+                        if (
+                            include_samples
+                            and len(samples["missing_payload"]) < sample_limit
+                        ):
                             samples["missing_payload"].append(str(point.id))
 
                     metadata = payload.get(METADATA_PATH) or payload.get("metadata")
                     if not isinstance(metadata, dict):
                         missing_metadata += 1
                         metadata = {}
-                        if include_samples and len(samples["missing_metadata"]) < sample_limit:
+                        if (
+                            include_samples
+                            and len(samples["missing_metadata"]) < sample_limit
+                        ):
                             samples["missing_metadata"].append(str(point.id))
 
                     text = extract_payload_text(payload)
                     if not text:
                         missing_text += 1
-                        if include_samples and len(samples["missing_text"]) < sample_limit:
+                        if (
+                            include_samples
+                            and len(samples["missing_text"]) < sample_limit
+                        ):
                             samples["missing_text"].append(str(point.id))
 
                     if metadata:
@@ -1964,9 +1971,10 @@ class QdrantMCPServer(FastMCP):
 
                     if missing_fields:
                         missing_required += 1
-                        if include_samples and len(
-                            samples["missing_required_fields"]
-                        ) < sample_limit:
+                        if (
+                            include_samples
+                            and len(samples["missing_required_fields"]) < sample_limit
+                        ):
                             samples["missing_required_fields"].append(
                                 {"id": str(point.id), "missing": missing_fields}
                             )
@@ -2009,7 +2017,10 @@ class QdrantMCPServer(FastMCP):
                     if count > 1:
                         duplicate_groups += 1
                         duplicate_points += count - 1
-                        if include_samples and len(samples["duplicate_groups"]) < sample_limit:
+                        if (
+                            include_samples
+                            and len(samples["duplicate_groups"]) < sample_limit
+                        ):
                             samples["duplicate_groups"].append(
                                 {
                                     "scope": scope,
@@ -2032,9 +2043,7 @@ class QdrantMCPServer(FastMCP):
             }
             if include_samples:
                 data["samples"] = samples
-            data["next_offset"] = (
-                str(offset) if offset is not None and stop else None
-            )
+            data["next_offset"] = str(offset) if offset is not None and stop else None
             if max_points is not None:
                 data["max_points"] = max_points
             return finish_request(state, data)
@@ -2165,7 +2174,9 @@ class QdrantMCPServer(FastMCP):
                         continue
 
                     payload = point.payload or {}
-                    metadata = payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    metadata = (
+                        payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    )
                     if not isinstance(metadata, dict):
                         metadata = {}
 
@@ -2509,14 +2520,14 @@ class QdrantMCPServer(FastMCP):
 
             if not dry_run and not confirm:
                 state.warnings.append("confirm=true required to apply re-embed.")
-                data = {
+                response = {
                     "scanned": 0,
                     "updated": 0,
                     "skipped_version_match": 0,
                     "skipped_missing_text": 0,
                     "dry_run": True,
                 }
-                return finish_request(state, data)
+                return finish_request(state, response)
             if not dry_run:
                 ensure_mutations_allowed()
 
@@ -2546,12 +2557,16 @@ class QdrantMCPServer(FastMCP):
 
             async def process_records(records: list[models.Record]) -> None:
                 nonlocal scanned, updated, skipped_version, skipped_missing_text
-                to_embed: list[tuple[models.Record, str, dict[str, Any], dict[str, Any]]] = []
+                to_embed: list[
+                    tuple[models.Record, str, dict[str, Any], dict[str, Any]]
+                ] = []
 
                 for record in records:
                     scanned += 1
                     payload = record.payload or {}
-                    metadata = payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    metadata = (
+                        payload.get(METADATA_PATH) or payload.get("metadata") or {}
+                    )
                     if not isinstance(metadata, dict):
                         metadata = {}
 
@@ -2716,7 +2731,9 @@ class QdrantMCPServer(FastMCP):
             if max_points is not None:
                 data["max_points"] = max_points
             if point_ids is None and stop:
-                next_offset = next_offset_override if next_offset_override is not None else offset
+                next_offset = (
+                    next_offset_override if next_offset_override is not None else offset
+                )
                 if next_offset is not None:
                     data["next_offset"] = str(next_offset)
             return finish_request(state, data)
@@ -2798,17 +2815,19 @@ class QdrantMCPServer(FastMCP):
             if point_ids and (memory_filter or query_filter):
                 raise ValueError("Provide either point_ids or filters, not both.")
             if point_ids is None and memory_filter is None and query_filter is None:
-                state.warnings.append("No filters provided; patch applies to all points.")
+                state.warnings.append(
+                    "No filters provided; patch applies to all points."
+                )
 
             if not dry_run and not confirm:
                 state.warnings.append("confirm=true required to apply bulk patch.")
-                data = {
+                response = {
                     "matched": 0,
                     "updated": 0,
                     "skipped": 0,
                     "dry_run": True,
                 }
-                return finish_request(state, data)
+                return finish_request(state, response)
             if not dry_run:
                 ensure_mutations_allowed()
 
@@ -2950,7 +2969,9 @@ class QdrantMCPServer(FastMCP):
             if max_points is not None:
                 data["max_points"] = max_points
             if point_ids is None:
-                data["next_offset"] = str(offset) if stop and offset is not None else None
+                data["next_offset"] = (
+                    str(offset) if stop and offset is not None else None
+                )
             return finish_request(state, data)
 
         async def dedupe_memories(
@@ -2971,7 +2992,9 @@ class QdrantMCPServer(FastMCP):
             ] = None,
             keep: Annotated[
                 str,
-                Field(description="Which duplicate to keep: newest, oldest, first, last."),
+                Field(
+                    description="Which duplicate to keep: newest, oldest, first, last."
+                ),
             ] = "newest",
             merge_metadata: Annotated[
                 bool, Field(description="Merge metadata into kept point.")
@@ -3005,13 +3028,13 @@ class QdrantMCPServer(FastMCP):
 
             if not dry_run and not confirm:
                 state.warnings.append("confirm=true required to apply dedupe.")
-                data = {
+                response = {
                     "scanned": 0,
                     "duplicate_groups": 0,
                     "duplicate_points": 0,
                     "dry_run": True,
                 }
-                return finish_request(state, data)
+                return finish_request(state, response)
             if not dry_run:
                 ensure_mutations_allowed()
 
@@ -3090,11 +3113,7 @@ class QdrantMCPServer(FastMCP):
                     return entries[-1]
 
                 def score(entry: dict[str, Any]) -> int:
-                    return (
-                        entry.get("updated_at_ts")
-                        or entry.get("created_at_ts")
-                        or 0
-                    )
+                    return entry.get("updated_at_ts") or entry.get("created_at_ts") or 0
 
                 return (
                     max(entries, key=score)
@@ -3151,9 +3170,7 @@ class QdrantMCPServer(FastMCP):
                         value = entry["metadata"].get("reinforcement_count")
                         count = coerce_int(value)
                         reinforcement_total += count if count and count > 0 else 1
-                    merged_metadata["reinforcement_count"] = max(
-                        reinforcement_total, 1
-                    )
+                    merged_metadata["reinforcement_count"] = max(reinforcement_total, 1)
 
                     last_seen_candidates: list[int] = []
                     for entry in entries:
@@ -3215,9 +3232,7 @@ class QdrantMCPServer(FastMCP):
                 data["dry_run_diff"] = dry_run_diff
             if max_points is not None:
                 data["max_points"] = max_points
-            data["next_offset"] = (
-                str(offset) if offset is not None and stop else None
-            )
+            data["next_offset"] = str(offset) if offset is not None and stop else None
             return finish_request(state, data)
 
         async def expire_memories(
@@ -3258,8 +3273,8 @@ class QdrantMCPServer(FastMCP):
 
             if not dry_run and not confirm:
                 state.warnings.append("confirm=true required to expire memories.")
-                data = {"matched": 0, "deleted": 0, "dry_run": True}
-                return finish_request(state, data)
+                early_response = {"matched": 0, "deleted": 0, "dry_run": True}
+                return finish_request(state, early_response)
             if not dry_run:
                 ensure_mutations_allowed()
 
@@ -3325,7 +3340,7 @@ class QdrantMCPServer(FastMCP):
                     if stop or offset is None:
                         break
 
-                data = {
+                response = {
                     "collection_name": collection,
                     "matched": matched,
                     "deleted": 0,
@@ -3334,7 +3349,7 @@ class QdrantMCPServer(FastMCP):
                     "preview_scanned": scanned,
                     "preview_truncated": scanned < matched,
                 }
-                return finish_request(state, data)
+                return finish_request(state, response)
 
             deleted = 0
             archived = 0
@@ -3343,9 +3358,7 @@ class QdrantMCPServer(FastMCP):
             next_offset = None
 
             if archive_collection:
-                await self.qdrant_connector.ensure_collection_exists(
-                    archive_collection
-                )
+                await self.qdrant_connector.ensure_collection_exists(archive_collection)
 
                 offset = None
                 stop = False
@@ -3484,13 +3497,13 @@ class QdrantMCPServer(FastMCP):
 
             if not dry_run and not confirm:
                 state.warnings.append("confirm=true required to merge duplicates.")
-                data = {
+                response = {
                     "dry_run": True,
                     "updated_canonical": False,
                     "marked_duplicates": 0,
                     "deleted_duplicates": 0,
                 }
-                return finish_request(state, data)
+                return finish_request(state, response)
             if not dry_run:
                 ensure_mutations_allowed()
 
@@ -3697,9 +3710,7 @@ class QdrantMCPServer(FastMCP):
                     with_payload=True,
                 )
                 found_ids = {str(record.id) for record in records}
-                missing_ids = [
-                    pid for pid in point_ids if str(pid) not in found_ids
-                ]
+                missing_ids = [pid for pid in point_ids if str(pid) not in found_ids]
                 for record in records:
                     record_dry_run_action(
                         dry_run_diff,
@@ -4441,7 +4452,9 @@ class QdrantMCPServer(FastMCP):
                 bool, Field(description="Confirm snapshot creation.")
             ] = False,
         ) -> dict[str, Any]:
-            state = new_request(ctx, {"collection_name": collection_name, "confirm": confirm})
+            state = new_request(
+                ctx, {"collection_name": collection_name, "confirm": confirm}
+            )
             ensure_mutations_allowed()
             if not self.tool_settings.admin_tools_enabled:
                 raise ValueError("Snapshot creation requires admin access.")
@@ -4637,9 +4650,7 @@ class QdrantMCPServer(FastMCP):
 
         async def submit_job(
             ctx: Context,
-            job_type: Annotated[
-                str, Field(description="Job type to run.")
-            ],
+            job_type: Annotated[str, Field(description="Job type to run.")],
             job_args: Annotated[
                 dict[str, Any] | None,
                 Field(description="Arguments for the job."),
@@ -4657,10 +4668,7 @@ class QdrantMCPServer(FastMCP):
                 raise ValueError(f"Unknown job_type '{job_type}'.")
 
             args = dict(job_args or {})
-            if (
-                "collection_name" not in args
-                and self.qdrant_settings.collection_name
-            ):
+            if "collection_name" not in args and self.qdrant_settings.collection_name:
                 args["collection_name"] = self.qdrant_settings.collection_name
 
             job_id = uuid.uuid4().hex

@@ -741,7 +741,10 @@ class QdrantConnector:
         method = getattr(self._client, "recover_snapshot", None)
         if method is None:
             raise ValueError("qdrant-client does not support recover_snapshot.")
-        kwargs: dict[str, Any] = {"collection_name": collection_name, "location": location}
+        kwargs: dict[str, Any] = {
+            "collection_name": collection_name,
+            "location": location,
+        }
         if api_key:
             kwargs["api_key"] = api_key
         if checksum:

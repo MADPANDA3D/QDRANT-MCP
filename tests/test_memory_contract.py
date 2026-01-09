@@ -2,8 +2,8 @@ import pytest
 
 from mcp_server_qdrant.memory import (
     EmbeddingInfo,
-    build_memory_filter,
     build_memory_backfill_patch,
+    build_memory_filter,
     compute_text_hash,
     normalize_memory_input,
 )
