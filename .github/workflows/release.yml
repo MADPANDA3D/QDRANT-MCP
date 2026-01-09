@@ -8,6 +8,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  packages: write
 
 jobs:
   release:
@@ -15,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -32,3 +35,38 @@ jobs:
         run: pnpm exec semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch tags
+        run: git fetch --tags
+
+      - name: Detect release tag
+        id: release_tag
+        run: |
+          TAG="$(git tag --points-at HEAD | grep '^v' | head -n 1 || true)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Python
+        if: steps.release_tag.outputs.tag != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build package
+        if: steps.release_tag.outputs.tag != ''
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Publish to PyPI
+        if: steps.release_tag.outputs.tag != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish to GitHub Packages
+        if: steps.release_tag.outputs.tag != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://pypi.pkg.github.com/${{ github.repository_owner }}
+          user: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
