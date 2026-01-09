@@ -1,0 +1,31 @@
+{
+  "name": "madpanda3d-qdrant-mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "release": "semantic-release",
+    "release:seed": "tsx scripts/seed-releases.ts",
+    "commit": "cz",
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.3.1",
+    "@commitlint/config-conventional": "^20.3.1",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/github": "^12.0.2",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "commitizen": "^4.3.1",
+    "conventional-changelog-conventionalcommits": "^9.1.0",
+    "cz-conventional-changelog": "^3.3.0",
+    "husky": "^9.1.7",
+    "pnpm": "^10.15.1",
+    "semantic-release": "^25.0.2",
+    "tsx": "^4.19.1",
+    "typescript": "5.9.3"
+  },
+  "config": {
+    "commitizen": {
+      "path": "cz-conventional-changelog"
+    }
+  }
+}

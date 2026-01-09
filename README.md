@@ -1,747 +1,205 @@
-# mcp-server-qdrant: A Qdrant MCP server
+# MADPANDA3D QDRANT MCP
 
-[![smithery badge](https://smithery.ai/badge/mcp-server-qdrant)](https://smithery.ai/protocol/mcp-server-qdrant)
+<p align="center">
+  <img src="assets/brand/header.jpg" alt="MADPANDA3D QDRANT MCP header" />
+</p>
+<p align="center">
+  <img src="assets/brand/logo.jpeg" alt="MADPANDA3D logo" width="140" />
+</p>
 
-> The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) is an open protocol that enables
-> seamless integration between LLM applications and external data sources and tools. Whether you're building an
-> AI-powered IDE, enhancing a chat interface, or creating custom AI workflows, MCP provides a standardized way to
-> connect LLMs with the context they need.
+<p align="center">
+  <strong>Manage your Vector Database how you see fit</strong>
+</p>
 
-This repository is an example of how to create a MCP server for [Qdrant](https://qdrant.tech/), a vector search engine.
+<p align="center">
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/actions/workflows/pre-commit.yaml">
+    <img src="https://img.shields.io/github/actions/workflow/status/MADPANDA3D/QDRANT-MCP/pre-commit.yaml?branch=main" alt="pre-commit status" />
+  </a>
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/actions/workflows/pytest.yaml">
+    <img src="https://img.shields.io/github/actions/workflow/status/MADPANDA3D/QDRANT-MCP/pytest.yaml?branch=main" alt="tests status" />
+  </a>
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/releases">
+    <img src="https://img.shields.io/github/v/release/MADPANDA3D/QDRANT-MCP?display_name=tag" alt="release" />
+  </a>
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/MADPANDA3D/QDRANT-MCP" alt="license" />
+  </a>
+</p>
 
-## Overview
+MADPANDA3D QDRANT MCP is a Model Context Protocol (MCP) server that gives agents a full toolkit
+for storing, searching, validating, and maintaining Qdrant vector memories at scale.
 
-An official Model Context Protocol server for keeping and retrieving memories in the Qdrant vector search engine.
-It acts as a semantic memory layer on top of the Qdrant database.
+## Deploy
 
-## Components
+- [Deploy on Railway (placeholder)](https://example.com/railway-deploy)
+- [Hostinger VPS (placeholder)](https://example.com/hostinger-vps)
 
-### Tools
+## Quickstart
 
-All tool responses include a `meta` object with request telemetry.
+<details>
+<summary>Run with Docker</summary>
 
-1. `qdrant-health-check`
-   - Verify connectivity, collection settings, payload schema, and index status.
-   - Input:
-     - `collection_name` (string, optional): Collection to inspect
-     - `warm_all` (boolean, optional): Warm up Qdrant + embedding clients
-   - Returns: Health report with checks and warnings
-2. `qdrant-store`
-   - Store a memory with dedupe/upsert and the memory contract (see below)
-   - Input:
-     - `information` (string): Memory text to store
-     - `metadata` (JSON): Memory metadata (type, entities, source, scope, timestamps, confidence)
-     - `dedupe_action` (string, optional): `update` or `skip`
-     - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
-                                   If there is a default collection name, this field is not enabled.
-   - Returns: Insert/update/skip results for each stored chunk
-3. `qdrant-ingest-with-validation`
-   - Validate memory contract before storing; can quarantine invalid payloads
-   - Input:
-     - `information` (string): Memory text to store
-     - `metadata` (JSON): Memory metadata
-     - `on_invalid` (string, optional): `allow`, `reject`, or `quarantine`
-     - `quarantine_collection` (string, optional): Override quarantine collection
-     - `dedupe_action` (string, optional): `update` or `skip`
-   - Returns: Store result plus validation report
-4. `qdrant-ingest-document`
-   - Ingest and chunk documents (txt, md, pdf, doc, docx) into Qdrant
-   - Input:
-     - `content_base64` (string, optional) OR `text` (string, optional) OR `source_url` (string, optional)
-     - `file_name` / `file_type` / `mime_type` (optional): Used to infer the parser
-     - `source_url_headers` (object, optional): Headers for fetching `source_url` (User-Agent, Authorization, etc.)
-     - `doc_id` / `doc_title` / `metadata` (optional): Stored with each chunk
-     - `chunk_size` / `chunk_overlap` / `ocr` / `dedupe_action` (optional)
-   - Returns: `doc_id`, `pages`, `chunks_count`, and warnings
-   - Note: if `metadata.doc_id` isn't indexed, the tool will attempt to create the payload index.
-5. `qdrant-find`
-   - Retrieve memories with structured filters and optional MMR diversity
-   - Input:
-     - `query` (string): Query to use for searching
-     - `memory_filter` (object, optional): Filters for type, entities, labels, scope, source, and date ranges
-     - `query_filter` (object, optional): Arbitrary Qdrant filter (when enabled)
-     - `top_k` (integer, optional): Max results
-     - `use_mmr` (boolean, optional): Enable MMR diversity
-     - `mmr_lambda` (float, optional): MMR trade-off (0-1)
-     - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
-                                   If there is a default collection name, this field is not enabled.
-   - Returns: Results with `id`, `score`, `payload`, and `snippet`
-6. `qdrant-validate-memory`
-   - Validate a memory payload against the contract
-   - Input:
-     - `information` (string, optional): Memory text
-     - `metadata` (JSON, optional): Memory metadata
-   - Returns: Validation report and suggested defaults
-7. `qdrant-list-points`
-   - List points with pagination (scroll)
-   - Input:
-     - `collection_name` (string, optional): Collection to scan
-     - `memory_filter` / `query_filter` (optional): Filters to apply
-     - `limit` (integer, optional): Max points to return
-     - `offset` (string | integer, optional): Offset from prior call
-     - `include_payload` / `include_vectors` (boolean, optional)
-   - Returns: Points and `next_offset`
-8. `qdrant-get-points`
-   - Retrieve points by id
-   - Input:
-     - `point_ids` (array): Point ids to retrieve
-     - `collection_name` (string, optional): Collection to read
-     - `include_payload` / `include_vectors` (boolean, optional)
-   - Returns: Points and `missing_ids`
-9. `qdrant-count-points`
-   - Count points matching an optional filter
-   - Input:
-     - `collection_name` (string, optional): Collection to count
-     - `memory_filter` / `query_filter` (optional): Filters to apply
-   - Returns: `count`
-10. `qdrant-audit-memories`
-    - Audit memory payloads for missing fields and duplicates
-    - Input:
-      - `collection_name` (string, optional): Collection to audit
-      - `memory_filter` / `query_filter` (optional): Filters to apply
-      - `batch_size` / `max_points` (optional): Scan controls
-      - `include_samples` / `sample_limit` (optional): Include issue samples
-    - Returns: Counts and optional samples
-11. `qdrant-find-near-duplicates`
-    - Find near-duplicate points using vector similarity
-    - Input:
-      - `collection_name` (string, optional): Collection to scan
-      - `memory_filter` / `query_filter` (optional): Filters to apply
-      - `threshold` (float, optional): Cosine threshold
-      - `group_by` (array, optional): Metadata fields to group by
-      - `batch_size` / `max_points` / `max_group_size` (optional)
-    - Returns: Candidate clusters with optional snippets/pairs
-12. `qdrant-submit-job`
-    - Submit a long-running housekeeping job (in-process)
-    - Input:
-      - `job_type` (string): e.g. `reembed-points`, `find-near-duplicates`, `bulk-patch`
-      - `job_args` (object, optional): Arguments for the job
-    - Note: jobs are in-process and cleared on server restart; logs keep the last 200 lines.
-13. `qdrant-job-status`
-    - Check status for a submitted job
-14. `qdrant-job-progress`
-    - Get progress for a submitted job
-15. `qdrant-job-logs`
-    - Fetch recent logs for a submitted job
-16. `qdrant-job-result`
-    - Fetch the result for a completed job
-17. `qdrant-cancel-job`
-    - Cancel a running job
-18. `qdrant-update-point`
-    - Update an existing point (re-embeds content)
-19. `qdrant-patch-payload`
-    - Patch metadata on an existing point
-20. `qdrant-reembed-points`
-    - Re-embed points when embedding version changes
-    - Input:
-      - `point_ids` (array, optional) OR `memory_filter` / `query_filter` (optional)
-      - `target_version` (string, optional)
-      - `batch_size` / `max_points` (optional)
-      - `recompute_text_hash` / `dry_run` / `confirm` (optional)
-21. `qdrant-bulk-patch`
-    - Apply metadata/payload patches to points by id or filter
-    - Input:
-      - `point_ids` (array, optional) OR `memory_filter` / `query_filter` (optional)
-      - `metadata_patch` / `payload_patch` (object)
-      - `merge_lists` (boolean, optional)
-      - `batch_size` / `max_points` (optional)
-      - `dry_run` / `confirm` (optional)
-22. `qdrant-dedupe-memories`
-    - Find and optionally delete duplicate memories
-    - Input:
-      - `collection_name` (string, optional): Collection to dedupe
-      - `memory_filter` / `query_filter` (optional): Filters to apply
-      - `batch_size` / `max_points` (optional)
-      - `keep` (string, optional): `newest`, `oldest`, `first`, `last`
-      - `merge_metadata` / `dry_run` / `confirm` (optional)
-23. `qdrant-merge-duplicates`
-    - Merge duplicate points into a canonical point
-    - Input:
-      - `canonical_id` (string): Point to keep
-      - `duplicate_ids` (array): Points to merge
-      - `delete_duplicates` / `mark_merged` / `dry_run` / `confirm` (optional)
-24. `qdrant-expire-memories`
-    - Delete memories with `expires_at_ts` in the past (optional archive)
-    - Input:
-      - `collection_name` (string, optional): Collection to scan
-      - `archive_collection` (string, optional): Archive collection name
-      - `batch_size` / `max_points` (optional)
-      - `dry_run` / `confirm` (optional)
-25. `qdrant-delete-points`
-    - Delete points by id (confirm required)
-26. `qdrant-delete-by-filter`
-    - Delete points by filter (confirm required, dry-run supported)
-27. `qdrant-delete-document`
-    - Delete all chunks for a document by `doc_id` (confirm required)
-28. `qdrant-list-collections`
-    - List all Qdrant collections
-29. `qdrant-collection-exists`
-    - Check if a collection exists
-    - Input:
-      - `collection_name` (string, optional): Collection to check
-30. `qdrant-collection-info`
-    - Get collection details including vectors and payload schema
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-31. `qdrant-collection-stats`
-    - Get collection statistics (points, segments, status)
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-32. `qdrant-collection-vectors`
-    - List vector names and sizes for a collection
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-33. `qdrant-collection-payload-schema`
-    - Get payload schema for a collection
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-34. `qdrant-optimizer-status`
-    - Get optimizer config and index coverage for a collection
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-35. `qdrant-metrics-snapshot`
-    - Snapshot collection stats and index coverage metrics
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-36. `qdrant-ensure-payload-indexes`
-    - Create payload indexes for the memory contract (idempotent)
-    - Input:
-      - `collection_name` (string, optional): Collection to update
-37. `qdrant-backfill-memory-contract`
-    - Backfill missing memory contract fields for existing points
-    - Input:
-      - `collection_name` (string, optional): Collection to update
-      - `batch_size` (integer, optional): Scan batch size
-      - `max_points` (integer, optional): Limit scan count
-      - `dry_run` (boolean, optional): Report changes without writing
-      - `confirm` (boolean, optional): Required when dry_run is false
-38. `qdrant-update-optimizer-config`
-    - Admin tool to update optimizer settings (requires `MCP_ADMIN_TOOLS_ENABLED=true`)
-    - Input:
-      - `collection_name` (string, optional): Collection to update
-      - `indexing_threshold` (integer, optional): Lower values force indexing sooner
-      - `max_optimization_threads` (integer, optional): Higher values may increase load
-      - `dry_run` (boolean, optional): Report changes without writing
-      - `confirm` (boolean, optional): Required when dry_run is false
-39. `qdrant-get-vector-name`
-    - Resolve the vector name used by this MCP server
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-40. `qdrant-list-aliases`
-    - List all collection aliases
-41. `qdrant-collection-aliases`
-    - List aliases for a specific collection
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-42. `qdrant-collection-cluster-info`
-    - Get cluster info for a collection
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-43. `qdrant-list-snapshots`
-    - List snapshots for a collection
-    - Input:
-      - `collection_name` (string, optional): Collection to inspect
-44. `qdrant-create-snapshot`
-    - Create a collection snapshot (admin-only, confirm required)
-45. `qdrant-restore-snapshot`
-    - Restore a collection snapshot (admin-only, confirm required)
-    - Input:
-      - `snapshot_location` (string): Snapshot URL/path
-46. `qdrant-list-full-snapshots`
-    - List full cluster snapshots
-47. `qdrant-list-shard-snapshots`
-    - List snapshots for a specific shard
-    - Input:
-      - `collection_name` (string): Collection to inspect
-      - `shard_id` (integer): Shard id to list snapshots for
+```bash
+docker build -t mcp-server-qdrant .
+docker run -d --name mcp-qdrant \
+  --env-file .env \
+  mcp-server-qdrant mcp-server-qdrant --transport streamable-http
+```
 
-Dry-run capable mutators return `dry_run_diff` previews with grouped counts and
-sample before/after metadata. Preview scans may be truncated for very large
-matches; check `preview_truncated` in responses.
+</details>
 
-### Maintenance Playbooks
+<details>
+<summary>Run locally (uvx)</summary>
 
-See `MAINTENANCE_PLAYBOOKS.md` for recommended operational sequences.
+```bash
+QDRANT_URL=... COLLECTION_NAME=... uvx mcp-server-qdrant
+```
 
-### Memory Contract
+</details>
+
+## Tools
+
+Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` preview for safer approvals.
+
+<details>
+<summary>Core Memory Tools</summary>
+
+- `qdrant-store`
+- `qdrant-ingest-with-validation`
+- `qdrant-ingest-document`
+- `qdrant-find`
+- `qdrant-update-point`
+- `qdrant-patch-payload`
+- `qdrant-list-points`
+- `qdrant-get-points`
+- `qdrant-count-points`
+
+</details>
+
+<details>
+<summary>Housekeeping + Quality</summary>
+
+- `qdrant-audit-memories`
+- `qdrant-backfill-memory-contract`
+- `qdrant-bulk-patch`
+- `qdrant-dedupe-memories`
+- `qdrant-find-near-duplicates`
+- `qdrant-merge-duplicates`
+- `qdrant-reembed-points`
+- `qdrant-expire-memories`
+- `qdrant-delete-points`
+- `qdrant-delete-by-filter`
+- `qdrant-delete-document`
+
+</details>
+
+<details>
+<summary>Jobs + Progress</summary>
+
+- `qdrant-submit-job`
+- `qdrant-job-status`
+- `qdrant-job-progress`
+- `qdrant-job-logs`
+- `qdrant-job-result`
+- `qdrant-cancel-job`
+
+</details>
+
+<details>
+<summary>Collection + Admin</summary>
+
+- `qdrant-health-check`
+- `qdrant-metrics-snapshot`
+- `qdrant-ensure-payload-indexes`
+- `qdrant-optimizer-status`
+- `qdrant-update-optimizer-config`
+- `qdrant-list-collections`
+- `qdrant-collection-exists`
+- `qdrant-collection-info`
+- `qdrant-collection-stats`
+- `qdrant-collection-vectors`
+- `qdrant-collection-payload-schema`
+- `qdrant-get-vector-name`
+- `qdrant-list-aliases`
+- `qdrant-collection-aliases`
+- `qdrant-collection-cluster-info`
+- `qdrant-list-snapshots`
+- `qdrant-list-full-snapshots`
+- `qdrant-list-shard-snapshots`
+- `qdrant-create-snapshot`
+- `qdrant-restore-snapshot`
+
+</details>
+
+## Configuration
+
+<details>
+<summary>Environment Variables</summary>
+
+| Name                       | Description                                                         | Default Value                                                     |
+|----------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
+| `QDRANT_URL`               | URL of the Qdrant server                                            | None                                                              |
+| `QDRANT_API_KEY`           | API key for the Qdrant server                                       | None                                                              |
+| `COLLECTION_NAME`          | Name of the default collection to use.                              | None                                                              |
+| `QDRANT_VECTOR_NAME`       | Override vector name used by the MCP server                         | None                                                              |
+| `QDRANT_LOCAL_PATH`        | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
+| `EMBEDDING_PROVIDER`       | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
+| `EMBEDDING_MODEL`          | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
+| `EMBEDDING_VECTOR_SIZE`    | Vector size override (required for unknown OpenAI models)           | unset                                                             |
+| `EMBEDDING_VERSION`        | Embedding version label stored with each memory                     | unset                                                             |
+| `OPENAI_API_KEY`           | OpenAI API key (required for `openai` provider)                     | unset                                                             |
+| `OPENAI_BASE_URL`          | OpenAI-compatible base URL (optional)                               | unset                                                             |
+| `OPENAI_ORG`               | OpenAI organization ID (optional)                                   | unset                                                             |
+| `OPENAI_PROJECT`           | OpenAI project ID (optional)                                        | unset                                                             |
+| `TOOL_STORE_DESCRIPTION`   | Custom description for the store tool                               | See default in `src/mcp_server_qdrant/settings.py`               |
+| `TOOL_FIND_DESCRIPTION`    | Custom description for the find tool                                | See default in `src/mcp_server_qdrant/settings.py`               |
+| `MCP_ADMIN_TOOLS_ENABLED`  | Enable admin-only tools (optimizer updates)                         | `false`                                                           |
+| `MCP_MUTATIONS_REQUIRE_ADMIN` | Require admin access for mutating tools                         | `false`                                                           |
+| `MCP_MAX_BATCH_SIZE`       | Max batch size for bulk operations                                  | `500`                                                             |
+| `MCP_MAX_POINT_IDS`        | Max point id list size                                              | `500`                                                             |
+| `MCP_STRICT_PARAMS`        | Reject unknown keys/filters and oversized text                      | `false`                                                           |
+| `MCP_MAX_TEXT_LENGTH`      | Max text length before chunking                                     | `8000`                                                            |
+| `MCP_DEDUPE_ACTION`        | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
+| `MCP_INGEST_VALIDATION_MODE` | Validation mode (`allow`, `reject`, `quarantine`)                 | `allow`                                                           |
+| `MCP_QUARANTINE_COLLECTION` | Collection name for quarantined memories                           | `jarvis-quarantine`                                               |
+| `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                              | unset                                                             |
+| `MCP_SERVER_VERSION`       | Optional git SHA for telemetry                                      | unset                                                             |
+
+Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
+
+</details>
+
+<details>
+<summary>Memory Contract</summary>
 
 Stored memories are normalized to include at least:
 `text`, `type`, `entities`, `source`, `created_at`, `updated_at`, `scope`, `confidence`, and `text_hash`.
+
 Optional fields include `expires_at` / `ttl_days`, `labels`, validation metadata
 (`validation_status`, `validation_errors`), merge markers (`merged_into`, `merged_from`),
 plus embedding metadata
 (`embedding_model`, `embedding_dim`, `embedding_provider`, `embedding_version`).
+
 Document ingestion stores additional fields such as `doc_id`, `doc_title`, `doc_hash`,
 `source_url`, `file_name`, `file_type`, `page_start`, `page_end`, and `section_heading`.
+
 When a duplicate `text_hash` is found in the same `scope`, the server updates
 `last_seen_at` and `reinforcement_count` instead of inserting a duplicate.
 
-## Environment Variables
+</details>
 
-The configuration of the server is done using environment variables:
+<details>
+<summary>Maintenance Playbooks</summary>
 
-| Name                     | Description                                                         | Default Value                                                     |
-|--------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
-| `QDRANT_URL`             | URL of the Qdrant server                                            | None                                                              |
-| `QDRANT_API_KEY`         | API key for the Qdrant server                                       | None                                                              |
-| `COLLECTION_NAME`        | Name of the default collection to use.                              | None                                                              |
-| `QDRANT_VECTOR_NAME`     | Override vector name used by the MCP server                         | None                                                              |
-| `QDRANT_LOCAL_PATH`      | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
-| `EMBEDDING_PROVIDER`     | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
-| `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
-| `EMBEDDING_VECTOR_SIZE`  | Vector size override (required for unknown OpenAI models)           | unset                                                             |
-| `EMBEDDING_VERSION`      | Embedding version label stored with each memory                     | unset                                                             |
-| `OPENAI_API_KEY`         | OpenAI API key (required for `openai` provider)                     | unset                                                             |
-| `OPENAI_BASE_URL`        | OpenAI-compatible base URL (optional)                               | unset                                                             |
-| `OPENAI_ORG`             | OpenAI organization ID (optional)                                   | unset                                                             |
-| `OPENAI_PROJECT`         | OpenAI project ID (optional)                                        | unset                                                             |
-| `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
-| `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
-| `MCP_ADMIN_TOOLS_ENABLED` | Enable admin-only tools (optimizer updates)                        | `false`                                                           |
-| `MCP_MUTATIONS_REQUIRE_ADMIN` | Require admin access for mutating tools                       | `false`                                                           |
-| `MCP_MAX_BATCH_SIZE`     | Max batch size for bulk operations                                  | `500`                                                             |
-| `MCP_MAX_POINT_IDS`      | Max point id list size                                               | `500`                                                             |
-| `MCP_STRICT_PARAMS`      | Reject unknown keys/filters and oversized text                       | `false`                                                           |
-| `MCP_MAX_TEXT_LENGTH`    | Max text length before chunking                                     | `8000`                                                            |
-| `MCP_DEDUPE_ACTION`      | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
-| `MCP_INGEST_VALIDATION_MODE` | Validation mode for ingest-with-validation (`allow`, `reject`, `quarantine`) | `allow`                                                           |
-| `MCP_QUARANTINE_COLLECTION` | Collection name for quarantined memories                         | `jarvis-quarantine`                                                |
-| `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                            | unset                                                             |
-| `MCP_SERVER_VERSION`     | Optional git SHA for telemetry                                      | unset                                                             |
+See `MAINTENANCE_PLAYBOOKS.md` for recommended maintenance flows.
 
-Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
+</details>
 
-> [!IMPORTANT]
-> Command-line arguments are not supported anymore! Please use environment variables for all configuration.
+## Release & Versioning
 
-### FastMCP Environment Variables
-
-Since `mcp-server-qdrant` is based on FastMCP, it also supports all the FastMCP environment variables. The most
-important ones are listed below:
-
-| Environment Variable                  | Description                                               | Default Value |
-|---------------------------------------|-----------------------------------------------------------|---------------|
-| `FASTMCP_DEBUG`                       | Enable debug mode                                         | `false`       |
-| `FASTMCP_LOG_LEVEL`                   | Set logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO`        |
-| `FASTMCP_HOST`                        | Host address to bind the server to                        | `127.0.0.1`   |
-| `FASTMCP_PORT`                        | Port to run the server on                                 | `8000`        |
-| `FASTMCP_WARN_ON_DUPLICATE_RESOURCES` | Show warnings for duplicate resources                     | `true`        |
-| `FASTMCP_WARN_ON_DUPLICATE_TOOLS`     | Show warnings for duplicate tools                         | `true`        |
-| `FASTMCP_WARN_ON_DUPLICATE_PROMPTS`   | Show warnings for duplicate prompts                       | `true`        |
-| `FASTMCP_DEPENDENCIES`                | List of dependencies to install in the server environment | `[]`          |
-
-## Installation
-
-### Using uvx
-
-When using [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools) no specific installation is needed to directly run *mcp-server-qdrant*.
-
-```shell
-QDRANT_URL="http://localhost:6333" \
-COLLECTION_NAME="my-collection" \
-EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2" \
-uvx mcp-server-qdrant
-```
-
-#### Transport Protocols
-
-The server supports different transport protocols that can be specified using the `--transport` flag:
-
-```shell
-QDRANT_URL="http://localhost:6333" \
-COLLECTION_NAME="my-collection" \
-uvx mcp-server-qdrant --transport sse
-```
-
-Supported transport protocols:
-
-- `stdio` (default): Standard input/output transport, might only be used by local MCP clients
-- `sse`: Server-Sent Events transport, perfect for remote clients
-- `streamable-http`: Streamable HTTP transport, perfect for remote clients, more recent than SSE
-
-The default transport is `stdio` if not specified.
-
-When SSE transport is used, the server will listen on the specified port and wait for incoming connections. The default
-port is 8000, however it can be changed using the `FASTMCP_PORT` environment variable.
-
-```shell
-QDRANT_URL="http://localhost:6333" \
-COLLECTION_NAME="my-collection" \
-FASTMCP_PORT=1234 \
-uvx mcp-server-qdrant --transport sse
-```
-
-### Using Docker
-
-A Dockerfile is available for building and running the MCP server:
-
-```bash
-# Build the container
-docker build -t mcp-server-qdrant .
-
-# Run the container
-docker run -p 8000:8000 \
-  -e FASTMCP_HOST="0.0.0.0" \
-  -e QDRANT_URL="http://your-qdrant-server:6333" \
-  -e QDRANT_API_KEY="your-api-key" \
-  -e COLLECTION_NAME="your-collection" \
-  mcp-server-qdrant
-```
-
-> [!TIP]
-> Please note that we set `FASTMCP_HOST="0.0.0.0"` to make the server listen on all network interfaces. This is
-> necessary when running the server in a Docker container.
-
-### Installing via Smithery
-
-To install Qdrant MCP Server for Claude Desktop automatically via [Smithery](https://smithery.ai/protocol/mcp-server-qdrant):
-
-```bash
-npx @smithery/cli install mcp-server-qdrant --client claude
-```
-
-### Manual configuration of Claude Desktop
-
-To use this server with the Claude Desktop app, add the following configuration to the "mcpServers" section of your
-`claude_desktop_config.json`:
-
-```json
-{
-  "qdrant": {
-    "command": "uvx",
-    "args": ["mcp-server-qdrant"],
-    "env": {
-      "QDRANT_URL": "https://xyz-example.eu-central.aws.cloud.qdrant.io:6333",
-      "QDRANT_API_KEY": "your_api_key",
-      "COLLECTION_NAME": "your-collection-name",
-      "EMBEDDING_MODEL": "sentence-transformers/all-MiniLM-L6-v2"
-    }
-  }
-}
-```
-
-For local Qdrant mode:
-
-```json
-{
-  "qdrant": {
-    "command": "uvx",
-    "args": ["mcp-server-qdrant"],
-    "env": {
-      "QDRANT_LOCAL_PATH": "/path/to/qdrant/database",
-      "COLLECTION_NAME": "your-collection-name",
-      "EMBEDDING_MODEL": "sentence-transformers/all-MiniLM-L6-v2"
-    }
-  }
-}
-```
-
-This MCP server will automatically create a collection with the specified name if it doesn't exist.
-
-By default, the server will use the `sentence-transformers/all-MiniLM-L6-v2` embedding model to encode memories.
-FastEmbed models are supported out of the box. To use OpenAI embeddings, set
-`EMBEDDING_PROVIDER=openai`, `OPENAI_API_KEY`, and an OpenAI model such as
-`text-embedding-3-large` (3072 dims) or `text-embedding-3-small` (1536 dims).
-
-## Support for other tools
-
-This MCP server can be used with any MCP-compatible client. For example, you can use it with
-[Cursor](https://docs.cursor.com/context/model-context-protocol) and [VS Code](https://code.visualstudio.com/docs), which provide built-in support for the Model Context
-Protocol.
-
-### Using with Cursor/Windsurf
-
-You can configure this MCP server to work as a code search tool for Cursor or Windsurf by customizing the tool
-descriptions:
-
-```bash
-QDRANT_URL="http://localhost:6333" \
-COLLECTION_NAME="code-snippets" \
-TOOL_STORE_DESCRIPTION="Store reusable code snippets for later retrieval. \
-The 'information' parameter should contain a natural language description of what the code does, \
-while the actual code should be included in the 'metadata' parameter as a 'code' property. \
-The value of 'metadata' is a Python dictionary with strings as keys. \
-Use this whenever you generate some code snippet." \
-TOOL_FIND_DESCRIPTION="Search for relevant code snippets based on natural language descriptions. \
-The 'query' parameter should describe what you're looking for, \
-and the tool will return the most relevant code snippets. \
-Use this when you need to find existing code snippets for reuse or reference." \
-uvx mcp-server-qdrant --transport sse # Enable SSE transport
-```
-
-In Cursor/Windsurf, you can then configure the MCP server in your settings by pointing to this running server using
-SSE transport protocol. The description on how to add an MCP server to Cursor can be found in the [Cursor
-documentation](https://docs.cursor.com/context/model-context-protocol#adding-an-mcp-server-to-cursor). If you are
-running Cursor/Windsurf locally, you can use the following URL:
-
-```
-http://localhost:8000/sse
-```
-
-> [!TIP]
-> We suggest SSE transport as a preferred way to connect Cursor/Windsurf to the MCP server, as it can support remote
-> connections. That makes it easy to share the server with your team or use it in a cloud environment.
-
-This configuration transforms the Qdrant MCP server into a specialized code search tool that can:
-
-1. Store code snippets, documentation, and implementation details
-2. Retrieve relevant code examples based on semantic search
-3. Help developers find specific implementations or usage patterns
-
-You can populate the database by storing natural language descriptions of code snippets (in the `information` parameter)
-along with the actual code (in the `metadata.code` property), and then search for them using natural language queries
-that describe what you're looking for.
-
-> [!NOTE]
-> The tool descriptions provided above are examples and may need to be customized for your specific use case. Consider
-> adjusting the descriptions to better match your team's workflow and the specific types of code snippets you want to
-> store and retrieve.
-
-**If you have successfully installed the `mcp-server-qdrant`, but still can't get it to work with Cursor, please
-consider creating the [Cursor rules](https://docs.cursor.com/context/rules-for-ai) so the MCP tools are always used when
-the agent produces a new code snippet.** You can restrict the rules to only work for certain file types, to avoid using
-the MCP server for the documentation or other types of content.
-
-### Using with Claude Code
-
-You can enhance Claude Code's capabilities by connecting it to this MCP server, enabling semantic search over your
-existing codebase.
-
-#### Setting up mcp-server-qdrant
-
-1. Add the MCP server to Claude Code:
-
-    ```shell
-    # Add mcp-server-qdrant configured for code search
-    claude mcp add code-search \
-    -e QDRANT_URL="http://localhost:6333" \
-    -e COLLECTION_NAME="code-repository" \
-    -e EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2" \
-    -e TOOL_STORE_DESCRIPTION="Store code snippets with descriptions. The 'information' parameter should contain a natural language description of what the code does, while the actual code should be included in the 'metadata' parameter as a 'code' property." \
-    -e TOOL_FIND_DESCRIPTION="Search for relevant code snippets using natural language. The 'query' parameter should describe the functionality you're looking for." \
-    -- uvx mcp-server-qdrant
-    ```
-
-2. Verify the server was added:
-
-    ```shell
-    claude mcp list
-    ```
-
-#### Using Semantic Code Search in Claude Code
-
-Tool descriptions, specified in `TOOL_STORE_DESCRIPTION` and `TOOL_FIND_DESCRIPTION`, guide Claude Code on how to use
-the MCP server. The ones provided above are examples and may need to be customized for your specific use case. However,
-Claude Code should be already able to:
-
-1. Use the `qdrant-store` tool to store code snippets with descriptions.
-2. Use the `qdrant-find` tool to search for relevant code snippets using natural language.
-
-### Run MCP server in Development Mode
-
-The MCP server can be run in development mode using the `mcp dev` command. This will start the server and open the MCP
-inspector in your browser.
-
-```shell
-COLLECTION_NAME=mcp-dev fastmcp dev src/mcp_server_qdrant/server.py
-```
-
-### Using with VS Code
-
-For one-click installation, click one of the install buttons below:
-
-[![Install with UVX in VS Code](https://img.shields.io/badge/VS_Code-UVX-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D) [![Install with UVX in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-UVX-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D&quality=insiders)
-
-[![Install with Docker in VS Code](https://img.shields.io/badge/VS_Code-Docker-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-p%22%2C%228000%3A8000%22%2C%22-i%22%2C%22--rm%22%2C%22-e%22%2C%22QDRANT_URL%22%2C%22-e%22%2C%22QDRANT_API_KEY%22%2C%22-e%22%2C%22COLLECTION_NAME%22%2C%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D) [![Install with Docker in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Docker-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-p%22%2C%228000%3A8000%22%2C%22-i%22%2C%22--rm%22%2C%22-e%22%2C%22QDRANT_URL%22%2C%22-e%22%2C%22QDRANT_API_KEY%22%2C%22-e%22%2C%22COLLECTION_NAME%22%2C%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D&quality=insiders)
-
-#### Manual Installation
-
-Add the following JSON block to your User Settings (JSON) file in VS Code. You can do this by pressing `Ctrl + Shift + P` and typing `Preferences: Open User Settings (JSON)`.
-
-```json
-{
-  "mcp": {
-    "inputs": [
-      {
-        "type": "promptString",
-        "id": "qdrantUrl",
-        "description": "Qdrant URL"
-      },
-      {
-        "type": "promptString",
-        "id": "qdrantApiKey",
-        "description": "Qdrant API Key",
-        "password": true
-      },
-      {
-        "type": "promptString",
-        "id": "collectionName",
-        "description": "Collection Name"
-      }
-    ],
-    "servers": {
-      "qdrant": {
-        "command": "uvx",
-        "args": ["mcp-server-qdrant"],
-        "env": {
-          "QDRANT_URL": "${input:qdrantUrl}",
-          "QDRANT_API_KEY": "${input:qdrantApiKey}",
-          "COLLECTION_NAME": "${input:collectionName}"
-        }
-      }
-    }
-  }
-}
-```
-
-Or if you prefer using Docker, add this configuration instead:
-
-```json
-{
-  "mcp": {
-    "inputs": [
-      {
-        "type": "promptString",
-        "id": "qdrantUrl",
-        "description": "Qdrant URL"
-      },
-      {
-        "type": "promptString",
-        "id": "qdrantApiKey",
-        "description": "Qdrant API Key",
-        "password": true
-      },
-      {
-        "type": "promptString",
-        "id": "collectionName",
-        "description": "Collection Name"
-      }
-    ],
-    "servers": {
-      "qdrant": {
-        "command": "docker",
-        "args": [
-          "run",
-          "-p", "8000:8000",
-          "-i",
-          "--rm",
-          "-e", "QDRANT_URL",
-          "-e", "QDRANT_API_KEY",
-          "-e", "COLLECTION_NAME",
-          "mcp-server-qdrant"
-        ],
-        "env": {
-          "QDRANT_URL": "${input:qdrantUrl}",
-          "QDRANT_API_KEY": "${input:qdrantApiKey}",
-          "COLLECTION_NAME": "${input:collectionName}"
-        }
-      }
-    }
-  }
-}
-```
-
-Alternatively, you can create a `.vscode/mcp.json` file in your workspace with the following content:
-
-```json
-{
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "qdrantUrl",
-      "description": "Qdrant URL"
-    },
-    {
-      "type": "promptString",
-      "id": "qdrantApiKey",
-      "description": "Qdrant API Key",
-      "password": true
-    },
-    {
-      "type": "promptString",
-      "id": "collectionName",
-      "description": "Collection Name"
-    }
-  ],
-  "servers": {
-    "qdrant": {
-      "command": "uvx",
-      "args": ["mcp-server-qdrant"],
-      "env": {
-        "QDRANT_URL": "${input:qdrantUrl}",
-        "QDRANT_API_KEY": "${input:qdrantApiKey}",
-        "COLLECTION_NAME": "${input:collectionName}"
-      }
-    }
-  }
-}
-```
-
-For workspace configuration with Docker, use this in `.vscode/mcp.json`:
-
-```json
-{
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "qdrantUrl",
-      "description": "Qdrant URL"
-    },
-    {
-      "type": "promptString",
-      "id": "qdrantApiKey",
-      "description": "Qdrant API Key",
-      "password": true
-    },
-    {
-      "type": "promptString",
-      "id": "collectionName",
-      "description": "Collection Name"
-    }
-  ],
-  "servers": {
-    "qdrant": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-p", "8000:8000",
-        "-i",
-        "--rm",
-        "-e", "QDRANT_URL",
-        "-e", "QDRANT_API_KEY",
-        "-e", "COLLECTION_NAME",
-        "mcp-server-qdrant"
-      ],
-      "env": {
-        "QDRANT_URL": "${input:qdrantUrl}",
-        "QDRANT_API_KEY": "${input:qdrantApiKey}",
-        "COLLECTION_NAME": "${input:collectionName}"
-      }
-    }
-  }
-}
-```
-
-## Contributing
-
-If you have suggestions for how mcp-server-qdrant could be improved, or want to report a bug, open an issue!
-We'd love all and any contributions.
-
-### Testing `mcp-server-qdrant` locally
-
-The [MCP inspector](https://github.com/modelcontextprotocol/inspector) is a developer tool for testing and debugging MCP
-servers. It runs both a client UI (default port 5173) and an MCP proxy server (default port 3000). Open the client UI in
-your browser to use the inspector.
-
-```shell
-QDRANT_URL=":memory:" COLLECTION_NAME="test" \
-fastmcp dev src/mcp_server_qdrant/server.py
-```
-
-Once started, open your browser to http://localhost:5173 to access the inspector interface.
+This repo uses conventional commits and semantic-release. Every push to `main` runs the
+release workflow, and a release is created only when commit messages warrant a version bump.
 
 ## License
 
-This MCP server is licensed under the Apache License 2.0. This means you are free to use, modify, and distribute the
-software, subject to the terms and conditions of the Apache License 2.0. For more details, please see the LICENSE file
-in the project repository.
+MIT
