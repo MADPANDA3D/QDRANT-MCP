@@ -2,6 +2,7 @@ import pytest
 
 from mcp_server_qdrant.memory import (
     EmbeddingInfo,
+    build_memory_filter,
     build_memory_backfill_patch,
     compute_text_hash,
     normalize_memory_input,
@@ -63,6 +64,42 @@ def test_normalize_memory_chunking():
         assert "chunk_index" in record.metadata
         assert "chunk_count" in record.metadata
         assert "parent_text_hash" in record.metadata
+
+
+def test_normalize_memory_labels_strict():
+    embedding = EmbeddingInfo(provider="fastembed", model="model", dim=3, version="v1")
+    records, warnings = normalize_memory_input(
+        information="Remember this",
+        metadata={
+            "text": "Remember this",
+            "type": "note",
+            "entities": [],
+            "labels": ["housekeeping"],
+            "source": "user",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "updated_at": "2024-01-01T00:00:00+00:00",
+            "scope": "global",
+            "confidence": 0.5,
+        },
+        memory=None,
+        embedding_info=embedding,
+        strict=True,
+        max_text_length=5000,
+    )
+    assert records[0].metadata["labels"] == ["housekeeping"]
+    assert warnings == []
+
+
+def test_build_memory_filter_labels():
+    warnings: list[str] = []
+    filt = build_memory_filter(
+        {"labels": ["alpha", "beta"]},
+        strict=False,
+        warnings=warnings,
+    )
+    assert warnings == []
+    assert filt is not None
+    assert filt.must[0].key.endswith(".labels")
 
 
 def test_backfill_patch_adds_missing_fields():

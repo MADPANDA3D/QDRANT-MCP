@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 import uuid
@@ -159,6 +160,21 @@ class QdrantConnector:
         await self._client.upsert(collection_name=collection_name, points=points)
         return point_ids
 
+    async def upsert_points(
+        self,
+        points: list[models.PointStruct],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not points:
+            return
+        if not await self._client.collection_exists(collection_name):
+            raise ValueError(f"collection_name '{collection_name}' does not exist.")
+        await self._client.upsert(collection_name=collection_name, points=points)
+
     async def search_points(
         self,
         query: str,
@@ -271,12 +287,14 @@ class QdrantConnector:
         query_filter: models.Filter | None = None,
         limit: int = 10,
         with_payload: bool = True,
+        with_vectors: bool = False,
     ) -> list[models.Record]:
         points, _ = await self.scroll_points_page(
             collection_name=collection_name,
             query_filter=query_filter,
             limit=limit,
             with_payload=with_payload,
+            with_vectors=with_vectors,
         )
         return points
 
@@ -287,6 +305,7 @@ class QdrantConnector:
         query_filter: models.Filter | None = None,
         limit: int = 10,
         with_payload: bool = True,
+        with_vectors: bool = False,
         offset: PointIdType | None = None,
     ) -> tuple[list[models.Record], PointIdType | None]:
         collection_name = collection_name or self._default_collection_name
@@ -297,6 +316,7 @@ class QdrantConnector:
             scroll_filter=query_filter,
             limit=limit,
             with_payload=with_payload,
+            with_vectors=with_vectors,
             offset=offset,
         )
         if isinstance(response, tuple):
@@ -317,6 +337,7 @@ class QdrantConnector:
         *,
         collection_name: str | None = None,
         with_payload: bool = True,
+        with_vectors: bool = False,
     ) -> list[models.Record]:
         collection_name = collection_name or self._default_collection_name
         if not collection_name:
@@ -325,6 +346,7 @@ class QdrantConnector:
             collection_name=collection_name,
             ids=list(point_ids),
             with_payload=with_payload,
+            with_vectors=with_vectors,
         )
 
     async def set_payload(
@@ -572,6 +594,9 @@ class QdrantConnector:
             summary["sparse_vectors"] = list(info.config.params.sparse_vectors.keys())
         return summary
 
+    async def ensure_collection_exists(self, collection_name: str) -> None:
+        await self._ensure_collection_exists(collection_name)
+
     async def resolve_vector_name(self, collection_name: str) -> str | None:
         return await self._resolve_vector_name(collection_name)
 
@@ -686,3 +711,53 @@ class QdrantConnector:
             "Multiple vectors match the embedding size. "
             f"Matches: {options}. Set QDRANT_VECTOR_NAME."
         )
+
+    async def create_snapshot(
+        self,
+        collection_name: str,
+        *,
+        wait: bool | None = None,
+    ) -> models.SnapshotDescription:
+        method = getattr(self._client, "create_snapshot", None)
+        if method is None:
+            raise ValueError("qdrant-client does not support create_snapshot.")
+        if wait is None:
+            return await method(collection_name=collection_name)
+        try:
+            return await method(collection_name=collection_name, wait=wait)
+        except TypeError:
+            return await method(collection_name=collection_name)
+
+    async def recover_snapshot(
+        self,
+        collection_name: str,
+        *,
+        location: str,
+        api_key: str | None = None,
+        checksum: str | None = None,
+        wait: bool | None = None,
+        priority: str | None = None,
+    ) -> Any:
+        method = getattr(self._client, "recover_snapshot", None)
+        if method is None:
+            raise ValueError("qdrant-client does not support recover_snapshot.")
+        kwargs: dict[str, Any] = {"collection_name": collection_name, "location": location}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if checksum:
+            kwargs["checksum"] = checksum
+        if wait is not None:
+            kwargs["wait"] = wait
+        if priority:
+            kwargs["priority"] = priority
+
+        try:
+            sig = inspect.signature(method)
+        except (TypeError, ValueError):
+            sig = None
+
+        if sig is not None:
+            allowed = set(sig.parameters.keys())
+            kwargs = {key: value for key, value in kwargs.items() if key in allowed}
+
+        return await method(**kwargs)

@@ -55,6 +55,11 @@ OPTIONAL_FIELDS = {
     "page_start",
     "page_end",
     "section_heading",
+    "labels",
+    "validation_errors",
+    "validation_status",
+    "merged_into",
+    "merged_from",
 }
 
 ALLOWED_MEMORY_KEYS = REQUIRED_FIELDS | OPTIONAL_FIELDS
@@ -62,6 +67,7 @@ ALLOWED_MEMORY_KEYS = REQUIRED_FIELDS | OPTIONAL_FIELDS
 FILTER_FIELDS = {
     "type",
     "entities",
+    "labels",
     "scope",
     "source",
     "doc_id",
@@ -104,6 +110,9 @@ class MemoryInput(BaseModel):
     entities: list[str] | None = Field(
         default=None, description="Entities mentioned in the memory."
     )
+    labels: list[str] | None = Field(
+        default=None, description="Optional labels for the memory."
+    )
     source: str | None = Field(default=None, description="Source of the memory.")
     created_at: Any | None = Field(default=None, description="Creation timestamp.")
     updated_at: Any | None = Field(default=None, description="Last update timestamp.")
@@ -123,6 +132,9 @@ class MemoryFilterInput(BaseModel):
     type: str | None = Field(default=None, description="Filter by memory type.")
     entities: list[str] | str | None = Field(
         default=None, description="Filter by entities (any match)."
+    )
+    labels: list[str] | str | None = Field(
+        default=None, description="Filter by labels (any match)."
     )
     scope: str | None = Field(default=None, description="Filter by scope.")
     source: str | None = Field(default=None, description="Filter by source.")
@@ -342,6 +354,22 @@ def normalize_memory_input(
         warnings.append("entities coerced to list.")
         entities_list = [_coerce_text(entities, "entities", strict, warnings)]
 
+    labels_list: list[str] | None = None
+    labels = raw.get("labels")
+    if labels is not None:
+        if isinstance(labels, str):
+            labels_list = [item.strip() for item in labels.split(",") if item.strip()]
+            warnings.append("labels coerced to list.")
+        elif isinstance(labels, list):
+            labels_list = [
+                _coerce_text(item, "labels", strict, warnings) for item in labels
+            ]
+        else:
+            if strict:
+                raise ValueError("labels must be a list or string.")
+            warnings.append("labels coerced to list.")
+            labels_list = [_coerce_text(labels, "labels", strict, warnings)]
+
     source = raw.get("source")
     if source is None:
         if strict:
@@ -480,6 +508,8 @@ def normalize_memory_input(
             "reinforcement_count": reinforcement_count,
         }
     )
+    if labels_list is not None:
+        base_metadata["labels"] = labels_list
 
     if ttl_days is not None:
         base_metadata["ttl_days"] = ttl_days
@@ -562,6 +592,22 @@ def build_memory_filter(
             )
         )
 
+    labels = raw.get("labels")
+    if labels is not None:
+        if isinstance(labels, str):
+            labels = [item.strip() for item in labels.split(",") if item.strip()]
+        if not isinstance(labels, list):
+            if strict:
+                raise ValueError("labels filter must be a list or string.")
+            warnings.append("labels filter coerced to list.")
+            labels = [labels]
+        must.append(
+            models.FieldCondition(
+                key=f"{METADATA_PATH}.labels",
+                match=models.MatchAny(any=labels),
+            )
+        )
+
     def add_range(field: str, start: Any, end: Any):
         range_kwargs: dict[str, Any] = {}
         if start is not None:
@@ -623,6 +669,7 @@ def default_memory_indexes() -> dict[str, models.PayloadSchemaType]:
         f"{METADATA_PATH}.type": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.source": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.entities": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.labels": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.doc_id": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.created_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.updated_at_ts": models.PayloadSchemaType.INTEGER,

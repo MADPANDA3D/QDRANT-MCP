@@ -35,7 +35,16 @@ All tool responses include a `meta` object with request telemetry.
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
    - Returns: Insert/update/skip results for each stored chunk
-3. `qdrant-ingest-document`
+3. `qdrant-ingest-with-validation`
+   - Validate memory contract before storing; can quarantine invalid payloads
+   - Input:
+     - `information` (string): Memory text to store
+     - `metadata` (JSON): Memory metadata
+     - `on_invalid` (string, optional): `allow`, `reject`, or `quarantine`
+     - `quarantine_collection` (string, optional): Override quarantine collection
+     - `dedupe_action` (string, optional): `update` or `skip`
+   - Returns: Store result plus validation report
+4. `qdrant-ingest-document`
    - Ingest and chunk documents (txt, md, pdf, doc, docx) into Qdrant
    - Input:
      - `content_base64` (string, optional) OR `text` (string, optional) OR `source_url` (string, optional)
@@ -45,11 +54,11 @@ All tool responses include a `meta` object with request telemetry.
      - `chunk_size` / `chunk_overlap` / `ocr` / `dedupe_action` (optional)
    - Returns: `doc_id`, `pages`, `chunks_count`, and warnings
    - Note: if `metadata.doc_id` isn't indexed, the tool will attempt to create the payload index.
-4. `qdrant-find`
+5. `qdrant-find`
    - Retrieve memories with structured filters and optional MMR diversity
    - Input:
      - `query` (string): Query to use for searching
-     - `memory_filter` (object, optional): Filters for type, entities, scope, source, and date ranges
+     - `memory_filter` (object, optional): Filters for type, entities, labels, scope, source, and date ranges
      - `query_filter` (object, optional): Arbitrary Qdrant filter (when enabled)
      - `top_k` (integer, optional): Max results
      - `use_mmr` (boolean, optional): Enable MMR diversity
@@ -57,47 +66,148 @@ All tool responses include a `meta` object with request telemetry.
      - `collection_name` (string): Name of the collection to store the information in. This field is required if there are no default collection name.
                                    If there is a default collection name, this field is not enabled.
    - Returns: Results with `id`, `score`, `payload`, and `snippet`
-5. `qdrant-update-point`
-   - Update an existing point (re-embeds content)
-6. `qdrant-patch-payload`
-   - Patch metadata on an existing point
-7. `qdrant-delete-points`
-   - Delete points by id (confirm required)
-8. `qdrant-delete-by-filter`
-   - Delete points by filter (confirm required, dry-run supported)
-9. `qdrant-delete-document`
-   - Delete all chunks for a document by `doc_id` (confirm required)
-10. `qdrant-list-collections`
+6. `qdrant-validate-memory`
+   - Validate a memory payload against the contract
+   - Input:
+     - `information` (string, optional): Memory text
+     - `metadata` (JSON, optional): Memory metadata
+   - Returns: Validation report and suggested defaults
+7. `qdrant-list-points`
+   - List points with pagination (scroll)
+   - Input:
+     - `collection_name` (string, optional): Collection to scan
+     - `memory_filter` / `query_filter` (optional): Filters to apply
+     - `limit` (integer, optional): Max points to return
+     - `offset` (string | integer, optional): Offset from prior call
+     - `include_payload` / `include_vectors` (boolean, optional)
+   - Returns: Points and `next_offset`
+8. `qdrant-get-points`
+   - Retrieve points by id
+   - Input:
+     - `point_ids` (array): Point ids to retrieve
+     - `collection_name` (string, optional): Collection to read
+     - `include_payload` / `include_vectors` (boolean, optional)
+   - Returns: Points and `missing_ids`
+9. `qdrant-count-points`
+   - Count points matching an optional filter
+   - Input:
+     - `collection_name` (string, optional): Collection to count
+     - `memory_filter` / `query_filter` (optional): Filters to apply
+   - Returns: `count`
+10. `qdrant-audit-memories`
+    - Audit memory payloads for missing fields and duplicates
+    - Input:
+      - `collection_name` (string, optional): Collection to audit
+      - `memory_filter` / `query_filter` (optional): Filters to apply
+      - `batch_size` / `max_points` (optional): Scan controls
+      - `include_samples` / `sample_limit` (optional): Include issue samples
+    - Returns: Counts and optional samples
+11. `qdrant-find-near-duplicates`
+    - Find near-duplicate points using vector similarity
+    - Input:
+      - `collection_name` (string, optional): Collection to scan
+      - `memory_filter` / `query_filter` (optional): Filters to apply
+      - `threshold` (float, optional): Cosine threshold
+      - `group_by` (array, optional): Metadata fields to group by
+      - `batch_size` / `max_points` / `max_group_size` (optional)
+    - Returns: Candidate clusters with optional snippets/pairs
+12. `qdrant-submit-job`
+    - Submit a long-running housekeeping job (in-process)
+    - Input:
+      - `job_type` (string): e.g. `reembed-points`, `find-near-duplicates`, `bulk-patch`
+      - `job_args` (object, optional): Arguments for the job
+    - Note: jobs are in-process and cleared on server restart; logs keep the last 200 lines.
+13. `qdrant-job-status`
+    - Check status for a submitted job
+14. `qdrant-job-progress`
+    - Get progress for a submitted job
+15. `qdrant-job-logs`
+    - Fetch recent logs for a submitted job
+16. `qdrant-job-result`
+    - Fetch the result for a completed job
+17. `qdrant-cancel-job`
+    - Cancel a running job
+18. `qdrant-update-point`
+    - Update an existing point (re-embeds content)
+19. `qdrant-patch-payload`
+    - Patch metadata on an existing point
+20. `qdrant-reembed-points`
+    - Re-embed points when embedding version changes
+    - Input:
+      - `point_ids` (array, optional) OR `memory_filter` / `query_filter` (optional)
+      - `target_version` (string, optional)
+      - `batch_size` / `max_points` (optional)
+      - `recompute_text_hash` / `dry_run` / `confirm` (optional)
+21. `qdrant-bulk-patch`
+    - Apply metadata/payload patches to points by id or filter
+    - Input:
+      - `point_ids` (array, optional) OR `memory_filter` / `query_filter` (optional)
+      - `metadata_patch` / `payload_patch` (object)
+      - `merge_lists` (boolean, optional)
+      - `batch_size` / `max_points` (optional)
+      - `dry_run` / `confirm` (optional)
+22. `qdrant-dedupe-memories`
+    - Find and optionally delete duplicate memories
+    - Input:
+      - `collection_name` (string, optional): Collection to dedupe
+      - `memory_filter` / `query_filter` (optional): Filters to apply
+      - `batch_size` / `max_points` (optional)
+      - `keep` (string, optional): `newest`, `oldest`, `first`, `last`
+      - `merge_metadata` / `dry_run` / `confirm` (optional)
+23. `qdrant-merge-duplicates`
+    - Merge duplicate points into a canonical point
+    - Input:
+      - `canonical_id` (string): Point to keep
+      - `duplicate_ids` (array): Points to merge
+      - `delete_duplicates` / `mark_merged` / `dry_run` / `confirm` (optional)
+24. `qdrant-expire-memories`
+    - Delete memories with `expires_at_ts` in the past (optional archive)
+    - Input:
+      - `collection_name` (string, optional): Collection to scan
+      - `archive_collection` (string, optional): Archive collection name
+      - `batch_size` / `max_points` (optional)
+      - `dry_run` / `confirm` (optional)
+25. `qdrant-delete-points`
+    - Delete points by id (confirm required)
+26. `qdrant-delete-by-filter`
+    - Delete points by filter (confirm required, dry-run supported)
+27. `qdrant-delete-document`
+    - Delete all chunks for a document by `doc_id` (confirm required)
+28. `qdrant-list-collections`
     - List all Qdrant collections
-11. `qdrant-collection-exists`
+29. `qdrant-collection-exists`
     - Check if a collection exists
     - Input:
       - `collection_name` (string, optional): Collection to check
-12. `qdrant-collection-info`
+30. `qdrant-collection-info`
     - Get collection details including vectors and payload schema
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-13. `qdrant-collection-stats`
+31. `qdrant-collection-stats`
     - Get collection statistics (points, segments, status)
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-14. `qdrant-collection-vectors`
+32. `qdrant-collection-vectors`
     - List vector names and sizes for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-15. `qdrant-collection-payload-schema`
+33. `qdrant-collection-payload-schema`
     - Get payload schema for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-16. `qdrant-optimizer-status`
+34. `qdrant-optimizer-status`
     - Get optimizer config and index coverage for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-17. `qdrant-ensure-payload-indexes`
+35. `qdrant-metrics-snapshot`
+    - Snapshot collection stats and index coverage metrics
+    - Input:
+      - `collection_name` (string, optional): Collection to inspect
+36. `qdrant-ensure-payload-indexes`
     - Create payload indexes for the memory contract (idempotent)
     - Input:
       - `collection_name` (string, optional): Collection to update
-18. `qdrant-backfill-memory-contract`
+37. `qdrant-backfill-memory-contract`
     - Backfill missing memory contract fields for existing points
     - Input:
       - `collection_name` (string, optional): Collection to update
@@ -105,7 +215,7 @@ All tool responses include a `meta` object with request telemetry.
       - `max_points` (integer, optional): Limit scan count
       - `dry_run` (boolean, optional): Report changes without writing
       - `confirm` (boolean, optional): Required when dry_run is false
-19. `qdrant-update-optimizer-config`
+38. `qdrant-update-optimizer-config`
     - Admin tool to update optimizer settings (requires `MCP_ADMIN_TOOLS_ENABLED=true`)
     - Input:
       - `collection_name` (string, optional): Collection to update
@@ -113,37 +223,53 @@ All tool responses include a `meta` object with request telemetry.
       - `max_optimization_threads` (integer, optional): Higher values may increase load
       - `dry_run` (boolean, optional): Report changes without writing
       - `confirm` (boolean, optional): Required when dry_run is false
-20. `qdrant-get-vector-name`
+39. `qdrant-get-vector-name`
     - Resolve the vector name used by this MCP server
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-21. `qdrant-list-aliases`
+40. `qdrant-list-aliases`
     - List all collection aliases
-22. `qdrant-collection-aliases`
+41. `qdrant-collection-aliases`
     - List aliases for a specific collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-23. `qdrant-collection-cluster-info`
+42. `qdrant-collection-cluster-info`
     - Get cluster info for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-24. `qdrant-list-snapshots`
+43. `qdrant-list-snapshots`
     - List snapshots for a collection
     - Input:
       - `collection_name` (string, optional): Collection to inspect
-25. `qdrant-list-full-snapshots`
+44. `qdrant-create-snapshot`
+    - Create a collection snapshot (admin-only, confirm required)
+45. `qdrant-restore-snapshot`
+    - Restore a collection snapshot (admin-only, confirm required)
+    - Input:
+      - `snapshot_location` (string): Snapshot URL/path
+46. `qdrant-list-full-snapshots`
     - List full cluster snapshots
-26. `qdrant-list-shard-snapshots`
+47. `qdrant-list-shard-snapshots`
     - List snapshots for a specific shard
     - Input:
       - `collection_name` (string): Collection to inspect
       - `shard_id` (integer): Shard id to list snapshots for
 
+Dry-run capable mutators return `dry_run_diff` previews with grouped counts and
+sample before/after metadata. Preview scans may be truncated for very large
+matches; check `preview_truncated` in responses.
+
+### Maintenance Playbooks
+
+See `MAINTENANCE_PLAYBOOKS.md` for recommended operational sequences.
+
 ### Memory Contract
 
 Stored memories are normalized to include at least:
 `text`, `type`, `entities`, `source`, `created_at`, `updated_at`, `scope`, `confidence`, and `text_hash`.
-Optional fields include `expires_at` / `ttl_days` plus embedding metadata
+Optional fields include `expires_at` / `ttl_days`, `labels`, validation metadata
+(`validation_status`, `validation_errors`), merge markers (`merged_into`, `merged_from`),
+plus embedding metadata
 (`embedding_model`, `embedding_dim`, `embedding_provider`, `embedding_version`).
 Document ingestion stores additional fields such as `doc_id`, `doc_title`, `doc_hash`,
 `source_url`, `file_name`, `file_type`, `page_start`, `page_end`, and `section_heading`.
@@ -172,9 +298,14 @@ The configuration of the server is done using environment variables:
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 | `MCP_ADMIN_TOOLS_ENABLED` | Enable admin-only tools (optimizer updates)                        | `false`                                                           |
+| `MCP_MUTATIONS_REQUIRE_ADMIN` | Require admin access for mutating tools                       | `false`                                                           |
+| `MCP_MAX_BATCH_SIZE`     | Max batch size for bulk operations                                  | `500`                                                             |
+| `MCP_MAX_POINT_IDS`      | Max point id list size                                               | `500`                                                             |
 | `MCP_STRICT_PARAMS`      | Reject unknown keys/filters and oversized text                       | `false`                                                           |
 | `MCP_MAX_TEXT_LENGTH`    | Max text length before chunking                                     | `8000`                                                            |
 | `MCP_DEDUPE_ACTION`      | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
+| `MCP_INGEST_VALIDATION_MODE` | Validation mode for ingest-with-validation (`allow`, `reject`, `quarantine`) | `allow`                                                           |
+| `MCP_QUARANTINE_COLLECTION` | Collection name for quarantined memories                         | `jarvis-quarantine`                                                |
 | `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                            | unset                                                             |
 | `MCP_SERVER_VERSION`     | Optional git SHA for telemetry                                      | unset                                                             |
 

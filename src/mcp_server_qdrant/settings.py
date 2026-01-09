@@ -35,6 +35,18 @@ class ToolSettings(BaseSettings):
         default=False,
         validation_alias="MCP_ADMIN_TOOLS_ENABLED",
     )
+    mutations_require_admin: bool = Field(
+        default=False,
+        validation_alias="MCP_MUTATIONS_REQUIRE_ADMIN",
+    )
+    max_batch_size: int = Field(
+        default=500,
+        validation_alias="MCP_MAX_BATCH_SIZE",
+    )
+    max_point_ids: int = Field(
+        default=500,
+        validation_alias="MCP_MAX_POINT_IDS",
+    )
 
 
 class EmbeddingProviderSettings(BaseSettings):
@@ -171,4 +183,12 @@ class MemorySettings(BaseSettings):
     health_check_collection: str | None = Field(
         default=None,
         validation_alias="MCP_HEALTH_CHECK_COLLECTION",
+    )
+    ingest_validation_mode: Literal["allow", "reject", "quarantine"] = Field(
+        default="allow",
+        validation_alias="MCP_INGEST_VALIDATION_MODE",
+    )
+    quarantine_collection: str = Field(
+        default="jarvis-quarantine",
+        validation_alias="MCP_QUARANTINE_COLLECTION",
     )

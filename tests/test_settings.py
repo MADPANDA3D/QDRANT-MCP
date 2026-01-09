@@ -93,6 +93,9 @@ class TestToolSettings:
         assert settings.tool_store_description == DEFAULT_TOOL_STORE_DESCRIPTION
         assert settings.tool_find_description == DEFAULT_TOOL_FIND_DESCRIPTION
         assert settings.admin_tools_enabled is False
+        assert settings.mutations_require_admin is False
+        assert settings.max_batch_size == 500
+        assert settings.max_point_ids == 500
 
     def test_custom_store_description(self, monkeypatch):
         """Test loading custom store description from environment variable."""
@@ -122,6 +125,15 @@ class TestToolSettings:
         settings = ToolSettings()
         assert settings.admin_tools_enabled is True
 
+    def test_mutation_limits(self, monkeypatch):
+        monkeypatch.setenv("MCP_MUTATIONS_REQUIRE_ADMIN", "1")
+        monkeypatch.setenv("MCP_MAX_BATCH_SIZE", "250")
+        monkeypatch.setenv("MCP_MAX_POINT_IDS", "100")
+        settings = ToolSettings()
+        assert settings.mutations_require_admin is True
+        assert settings.max_batch_size == 250
+        assert settings.max_point_ids == 100
+
 
 class TestMemorySettings:
     def test_default_values(self):
@@ -130,14 +142,20 @@ class TestMemorySettings:
         assert settings.max_text_length == 8000
         assert settings.dedupe_action == "update"
         assert settings.health_check_collection is None
+        assert settings.ingest_validation_mode == "allow"
+        assert settings.quarantine_collection == "jarvis-quarantine"
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("MCP_STRICT_PARAMS", "1")
         monkeypatch.setenv("MCP_MAX_TEXT_LENGTH", "2048")
         monkeypatch.setenv("MCP_DEDUPE_ACTION", "skip")
         monkeypatch.setenv("MCP_HEALTH_CHECK_COLLECTION", "jarvis-knowledge-base")
+        monkeypatch.setenv("MCP_INGEST_VALIDATION_MODE", "quarantine")
+        monkeypatch.setenv("MCP_QUARANTINE_COLLECTION", "jarvis-quarantine-dev")
         settings = MemorySettings()
         assert settings.strict_params is True
         assert settings.max_text_length == 2048
         assert settings.dedupe_action == "skip"
         assert settings.health_check_collection == "jarvis-knowledge-base"
+        assert settings.ingest_validation_mode == "quarantine"
+        assert settings.quarantine_collection == "jarvis-quarantine-dev"
