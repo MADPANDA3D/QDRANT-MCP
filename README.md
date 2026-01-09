@@ -35,20 +35,10 @@
 
 ## Deploy
 
-<p align="center">
-  <a href="https://example.com/railway-deploy">
-    <img src="https://railway.app/button.svg" alt="Deploy on Railway" />
-  </a>
-  <a href="https://example.com/vercel-deploy">
-    <img src="https://vercel.com/button" alt="Deploy with Vercel" />
-  </a>
-  <a href="https://example.com/vps-deploy">
-    <img src="https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white" alt="Deploy to VPS" />
-  </a>
-  <a href="https://example.com/donate">
-    <img src="https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white" alt="Donate to the Project" />
-  </a>
-</p>
+- [![Deploy on Railway](https://railway.app/button.svg)](https://example.com/railway-deploy)
+- [![Deploy with Vercel](https://vercel.com/button)](https://example.com/vercel-deploy)
+- [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://example.com/vps-deploy)
+- [![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://example.com/donate)
 
 ## Quickstart
 
