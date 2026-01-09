@@ -23,8 +23,14 @@
   <strong>Manage your Vector Database how you see fit</strong>
 </p>
 <p align="center">
-  A production-ready MCP server for Qdrant that gives your agents a full toolkit to
-  store, search, validate, and maintain vector memories at scale.
+  MADPANDA3D QDRANT MCP is a production-ready Model Context Protocol server for Qdrant.
+  It turns your vector store into a managed memory layer with structured controls for
+  ingest, retrieval, validation, and ongoing cleanup.
+</p>
+<p align="center">
+  Use it to keep memories clean, deduped, and relevance-tuned over time. The toolkit
+  includes safe dry-run previews, bulk maintenance jobs with progress reporting, and
+  operational guardrails so agents can manage your database at scale without chaos.
 </p>
 
 ## Deploy
