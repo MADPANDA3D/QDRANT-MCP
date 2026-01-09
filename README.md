@@ -41,13 +41,17 @@
 - [![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://example.com/donate)
 
 <details>
-<summary>Hostinger Partner Links</summary>
+<summary>DEPLOY ON VPS</summary>
 
-### VPS
 - [![Hostinger VPS KVM 1](https://img.shields.io/badge/Hostinger_VPS_KVM_1-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_1&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-d783-7057-85d2-27de6e01e2c5)
 - [![Hostinger VPS KVM 2](https://img.shields.io/badge/Hostinger_VPS_KVM_2-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_2&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-26cf-7333-b6d7-692e17bf8ce1)
 - [![Hostinger VPS KVM 4](https://img.shields.io/badge/Hostinger_VPS_KVM_4-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_4&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-531e-70d3-83f5-e28eb919466d)
 - [![Hostinger VPS KVM 8](https://img.shields.io/badge/Hostinger_VPS_KVM_8-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_8&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-7ce9-70fb-b96c-2184abc56764)
+
+</details>
+
+<details>
+<summary>Hostinger Partner Links</summary>
 
 ### Cloud Hosting
 - [Cloud Economy](https://www.hostinger.com/cart?product=hosting%3Acloud_economy&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-e7fa-7358-9ff0-f9ba2e8d6e36)
