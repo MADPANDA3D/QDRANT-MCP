@@ -9,7 +9,8 @@ This repository hosts the Qdrant MCP server. Use these notes to keep contributio
 - `README.md`, `VPS_SETUP.md`, `Dockerfile`, `.github/workflows/`: docs, ops, and CI definitions.
 
 ## Build, Test, and Development Commands
-- `uv sync`: install runtime and dev dependencies from `pyproject.toml`/`uv.lock`.
+- `uv sync --group dev`: install runtime + dev dependencies from `pyproject.toml`/`uv.lock`.
+- `uv pip install -e .`: install the project in editable mode for local imports/tests.
 - `uv run pytest`: run the test suite (CI uses this).
 - `uv run pre-commit run --all-files`: run ruff, ruff-format, isort, and mypy hooks.
 - `QDRANT_URL=... COLLECTION_NAME=... uvx mcp-server-qdrant`: run the server locally.
