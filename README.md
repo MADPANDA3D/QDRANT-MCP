@@ -1,5 +1,3 @@
-# MADPANDA3D QDRANT MCP
-
 <p align="center">
   <img src="assets/brand/header.jpg" alt="MADPANDA3D QDRANT MCP header" />
 </p>
@@ -20,6 +18,7 @@
 </p>
 
 <p align="center">
+  <strong># MADPANDA3D QDRANT MCP</strong>
   <strong>Manage your Vector Database how you see fit</strong>
 </p>
 <p align="center">
