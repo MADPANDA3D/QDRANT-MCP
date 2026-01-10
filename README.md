@@ -17,8 +17,8 @@
   </a>
 </p>
 
+<h1 align="center"><strong>MADPANDA3D QDRANT MCP</strong></h1>
 <p align="center">
-  <strong># MADPANDA3D QDRANT MCP</strong>
   <strong>Manage your Vector Database how you see fit</strong>
 </p>
 <p align="center">
