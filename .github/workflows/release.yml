@@ -104,6 +104,8 @@ jobs:
           set +e
           echo "gh_packages_user=${GH_PACKAGES_USER}"
           echo "gh_owner=${GH_OWNER}"
+          SCOPE_HEADERS=$(curl -sI -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" https://api.github.com/)
+          echo "${SCOPE_HEADERS}" | tr -d '\r' | awk -F': ' '/^X-OAuth-Scopes:/ {print "token_scopes: " $2} /^X-Accepted-OAuth-Scopes:/ {print "accepted_scopes: " $2}'
           USER_CODE=$(curl -s -o /tmp/gh_user.json -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" https://api.github.com/user)
           echo "GET /user -> ${USER_CODE}"
           USER_LOGIN=$(jq -r '.login // empty' /tmp/gh_user.json 2>/dev/null)
@@ -112,6 +114,10 @@ jobs:
           echo "GET /orgs/${GH_OWNER} -> ${ORG_CODE}"
           ORG_LOGIN=$(jq -r '.login // empty' /tmp/gh_org.json 2>/dev/null)
           if [ -n "${ORG_LOGIN}" ]; then echo "org: ${ORG_LOGIN}"; else echo "org: <unavailable>"; fi
+          USER_PKG_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" "https://api.github.com/user/packages?package_type=pypi")
+          echo "GET /user/packages?package_type=pypi -> ${USER_PKG_CODE}"
+          ORG_PKG_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" "https://api.github.com/orgs/${GH_OWNER}/packages?package_type=pypi")
+          echo "GET /orgs/${GH_OWNER}/packages?package_type=pypi -> ${ORG_PKG_CODE}"
           PKG_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" "https://pypi.pkg.github.com/${GH_OWNER}/")
           echo "GET pypi.pkg.github.com -> ${PKG_CODE}"
 
