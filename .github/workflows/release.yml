@@ -57,6 +57,39 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
+      - name: Debug GitHub Packages auth
+        if: steps.release_tag.outputs.tag != ''
+        env:
+          GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GH_OWNER: ${{ github.repository_owner }}
+        run: |
+          set +e
+          echo "gh_packages_user=${GH_PACKAGES_USER}"
+          echo "gh_owner=${GH_OWNER}"
+          USER_CODE=$(curl -s -o /tmp/gh_user.json -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" https://api.github.com/user)
+          echo "GET /user -> ${USER_CODE}"
+          python - <<'PY'
+import json
+try:
+    data = json.load(open("/tmp/gh_user.json"))
+    print("login:", data.get("login"))
+except Exception:
+    print("login: <unavailable>")
+PY
+          ORG_CODE=$(curl -s -o /tmp/gh_org.json -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" "https://api.github.com/orgs/${GH_OWNER}")
+          echo "GET /orgs/${GH_OWNER} -> ${ORG_CODE}"
+          python - <<'PY'
+import json
+try:
+    data = json.load(open("/tmp/gh_org.json"))
+    print("org:", data.get("login"))
+except Exception:
+    print("org: <unavailable>")
+PY
+          PKG_CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" "https://pypi.pkg.github.com/${GH_OWNER}/")
+          echo "GET pypi.pkg.github.com -> ${PKG_CODE}"
+
       - name: Publish to PyPI
         if: steps.release_tag.outputs.tag != ''
         uses: pypa/gh-action-pypi-publish@release/v1
