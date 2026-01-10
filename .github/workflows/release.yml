@@ -13,6 +13,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GH_OWNER_LOWER: ${{ toLower(github.repository_owner) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,7 +64,7 @@ jobs:
         env:
           GH_PACKAGES_USER: ${{ github.repository_owner }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          GH_OWNER: ${{ github.repository_owner }}
+          GH_OWNER: ${{ env.GH_OWNER_LOWER }}
         run: |
           set +e
           echo "auth_source=GH_PACKAGES_TOKEN"
@@ -91,7 +93,7 @@ jobs:
         continue-on-error: true
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          repository-url: https://pypi.pkg.github.com/${{ github.repository_owner }}/
+          repository-url: https://pypi.pkg.github.com/${{ env.GH_OWNER_LOWER }}/
           user: ${{ github.repository_owner }}
           password: ${{ secrets.GH_PACKAGES_TOKEN }}
 
@@ -100,7 +102,7 @@ jobs:
         env:
           GH_PACKAGES_USER: ${{ github.repository_owner }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          GH_OWNER: ${{ github.repository_owner }}
+          GH_OWNER: ${{ env.GH_OWNER_LOWER }}
         run: |
           set +e
           echo "auth_source=GH_PACKAGES_TOKEN"
