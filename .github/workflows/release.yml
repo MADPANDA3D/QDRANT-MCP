@@ -60,11 +60,12 @@ jobs:
       - name: Debug GitHub Packages auth
         if: steps.release_tag.outputs.tag != ''
         env:
-          GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
-          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GH_PACKAGES_USER: ${{ github.actor }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
           set +e
+          echo "auth_source=GITHUB_TOKEN"
           echo "gh_packages_user=${GH_PACKAGES_USER}"
           echo "gh_owner=${GH_OWNER}"
           USER_CODE=$(curl -s -o /tmp/gh_user.json -w "%{http_code}" -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" https://api.github.com/user)
@@ -91,17 +92,18 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://pypi.pkg.github.com/${{ github.repository_owner }}/
-          user: ${{ secrets.GH_PACKAGES_USER || github.actor }}
-          password: ${{ secrets.GH_PACKAGES_TOKEN }}
+          user: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Debug GitHub Packages auth (post)
         if: steps.release_tag.outputs.tag != ''
         env:
-          GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
-          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          GH_PACKAGES_USER: ${{ github.actor }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
           set +e
+          echo "auth_source=GITHUB_TOKEN"
           echo "gh_packages_user=${GH_PACKAGES_USER}"
           echo "gh_owner=${GH_OWNER}"
           SCOPE_HEADERS=$(curl -sI -u "${GH_PACKAGES_USER}:${GH_PACKAGES_TOKEN}" https://api.github.com/)
