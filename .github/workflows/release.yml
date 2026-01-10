@@ -60,7 +60,7 @@ jobs:
       - name: Debug GitHub Packages auth
         if: steps.release_tag.outputs.tag != ''
         env:
-          GH_PACKAGES_USER: ${{ github.actor }}
+          GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
@@ -92,13 +92,13 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://pypi.pkg.github.com/${{ github.repository_owner }}/
-          user: __token__
+          user: ${{ secrets.GH_PACKAGES_USER || github.actor }}
           password: ${{ secrets.GH_PACKAGES_TOKEN }}
 
       - name: Debug GitHub Packages auth (post)
         if: steps.release_tag.outputs.tag != ''
         env:
-          GH_PACKAGES_USER: ${{ github.actor }}
+          GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
           GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
