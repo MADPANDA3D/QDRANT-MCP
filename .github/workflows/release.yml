@@ -14,7 +14,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      GH_OWNER_LOWER: ${{ toLower(github.repository_owner) }}
+      GH_OWNER_LOWER: ${{ github.repository_owner }}
       GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
       GH_PACKAGES_AUTH_SOURCE: ${{ secrets.GH_PACKAGES_TOKEN && 'GH_PACKAGES_TOKEN' || 'GITHUB_TOKEN' }}
@@ -23,6 +23,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Normalize owner casing
+        run: |
+          OWNER_LOWER=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "GH_OWNER_LOWER=${OWNER_LOWER}" >> "$GITHUB_ENV"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
