@@ -39,6 +39,19 @@
 - [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://example.com/vps-deploy)
 - [![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://example.com/donate)
 
+### Use the Hosted MCP in n8n
+
+1. Add **MCP tool node** to your agent.
+2. Add the MCP endpoint URL (your hosted MCP).
+3. Set **Server transport** to **HTTP streamable**.
+4. Set **Auth** to **Multiple Headers Auth**.
+5. Add headers:
+   - `X-Qdrant-Url`
+   - `X-Collection-Name`
+   - `X-Qdrant-Api-Key` (required for private Qdrant)
+6. Save the auth credentials.
+7. Set **Tools to include** → **All**.
+
 <details>
 <summary>DEPLOY ON VPS</summary>
 
