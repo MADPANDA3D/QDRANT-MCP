@@ -4,6 +4,7 @@ WORKDIR /app
 
 # Allow VCS-based versioning without .git in the image
 ARG PACKAGE_VERSION=0.0.0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${PACKAGE_VERSION}
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MAD_MCP_QDRANT=${PACKAGE_VERSION}
 
 # System deps for document extraction (PDF OCR + .doc parsing)
