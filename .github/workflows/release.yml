@@ -52,6 +52,8 @@ jobs:
         run: |
           TAG="$(git tag --points-at HEAD | grep '^v' | head -n 1 || true)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup Python
         if: steps.release_tag.outputs.tag != ''
@@ -92,4 +94,5 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.tag }}
+            ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.version }}
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:latest
