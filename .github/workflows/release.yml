@@ -92,6 +92,8 @@ jobs:
           context: .
           file: Dockerfile
           push: true
+          build-args: |
+            PACKAGE_VERSION=${{ steps.release_tag.outputs.version }}
           tags: |
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.tag }}
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.version }}

@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Allow VCS-based versioning without .git in the image
+ARG PACKAGE_VERSION=0.0.0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MAD_MCP_QDRANT=${PACKAGE_VERSION}
+
 # System deps for document extraction (PDF OCR + .doc parsing)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     antiword \
