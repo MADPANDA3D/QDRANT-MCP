@@ -34,8 +34,8 @@
 
 ## Deploy
 
-- [![Deploy on Railway](https://railway.app/button.svg)](https://example.com/railway-deploy)
-- [![Deploy with Vercel](https://vercel.com/button)](https://example.com/vercel-deploy)
+- [![Deploy on Railway](https://railway.app/button.svg)](https://example.com/railway-deploy) (coming soon)
+- [![Deploy with Vercel](https://vercel.com/button)](https://example.com/vercel-deploy) (coming soon)
 - [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://example.com/vps-deploy)
 - [![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://example.com/donate)
 
