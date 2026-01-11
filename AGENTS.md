@@ -40,7 +40,7 @@ This repository hosts the Qdrant MCP server. Use these notes to keep contributio
 - Commit messages must follow Conventional Commits (e.g., `feat: ...`, `fix: ...`, `chore: ...`, `docs: ...`).
 - Every push to `main` runs semantic-release; releases are gated by commit message types.
 - Always create the commit message yourself and push changes directly to `main`.
-- Perform GitHub Actions changes and workflow triggers via the GitHub MCP (not direct local git), so commits show your account instead of `root`.
+- Perform all GitHub actions (commits, pushes, workflow changes, release triggers) via the GitHub MCP (not direct local git), so commits show your account instead of `root`.
 - PRs should include: what changed, why, how tested (commands), and any new/updated env vars or docs.
 - If configuration changes, update the env var table in `README.md`.
 

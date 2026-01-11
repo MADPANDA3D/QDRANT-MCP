@@ -1,6 +1,7 @@
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
@@ -166,6 +167,65 @@ class QdrantSettings(BaseSettings):
                 raise ValueError(
                     "If 'local_path' is set, 'location' and 'api_key' must be None."
                 )
+        return self
+
+
+class RequestOverrideSettings(BaseSettings):
+    """
+    Per-request overrides for hosted deployments.
+    """
+
+    allow_request_overrides: bool = Field(
+        default=False,
+        validation_alias="MCP_ALLOW_REQUEST_OVERRIDES",
+    )
+    require_request_qdrant_url: bool = Field(
+        default=True,
+        validation_alias="MCP_REQUIRE_REQUEST_QDRANT_URL",
+    )
+    require_request_collection: bool = Field(
+        default=True,
+        validation_alias="MCP_REQUIRE_REQUEST_COLLECTION",
+    )
+    qdrant_url_header: str = Field(
+        default="x-qdrant-url",
+        validation_alias="MCP_QDRANT_URL_HEADER",
+    )
+    qdrant_api_key_header: str = Field(
+        default="x-qdrant-api-key",
+        validation_alias="MCP_QDRANT_API_KEY_HEADER",
+    )
+    collection_name_header: str = Field(
+        default="x-collection-name",
+        validation_alias="MCP_COLLECTION_NAME_HEADER",
+    )
+    vector_name_header: str = Field(
+        default="x-qdrant-vector-name",
+        validation_alias="MCP_QDRANT_VECTOR_NAME_HEADER",
+    )
+    qdrant_host_allowlist: list[str] = Field(
+        default_factory=list,
+        validation_alias="MCP_QDRANT_HOST_ALLOWLIST",
+    )
+
+    @field_validator("qdrant_host_allowlist", mode="before")
+    @classmethod
+    def parse_allowlist(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            parts = [item.strip().lower() for item in re.split(r"[,\s]+", value)]
+            return [item for item in parts if item]
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return []
+
+    @model_validator(mode="after")
+    def normalize_headers(self) -> "RequestOverrideSettings":
+        self.qdrant_url_header = self.qdrant_url_header.lower()
+        self.qdrant_api_key_header = self.qdrant_api_key_header.lower()
+        self.collection_name_header = self.collection_name_header.lower()
+        self.vector_name_header = self.vector_name_header.lower()
         return self
 
 

@@ -222,10 +222,47 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_QUARANTINE_COLLECTION` | Collection name for quarantined memories                           | `jarvis-quarantine`                                               |
 | `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                              | unset                                                             |
 | `MCP_SERVER_VERSION`       | Optional git SHA for telemetry                                      | unset                                                             |
+| `MCP_ALLOW_REQUEST_OVERRIDES` | Allow per-request Qdrant headers                                 | `false`                                                           |
+| `MCP_REQUIRE_REQUEST_QDRANT_URL` | Require `X-Qdrant-Url` when overrides enabled               | `true`                                                            |
+| `MCP_REQUIRE_REQUEST_COLLECTION` | Require `X-Collection-Name` when overrides enabled         | `true`                                                            |
+| `MCP_QDRANT_URL_HEADER`     | Header name for Qdrant URL                                          | `x-qdrant-url`                                                    |
+| `MCP_QDRANT_API_KEY_HEADER` | Header name for Qdrant API key                                      | `x-qdrant-api-key`                                                |
+| `MCP_COLLECTION_NAME_HEADER` | Header name for collection name                                   | `x-collection-name`                                               |
+| `MCP_QDRANT_VECTOR_NAME_HEADER` | Header name for vector name                                   | `x-qdrant-vector-name`                                            |
+| `MCP_QDRANT_HOST_ALLOWLIST` | Comma/space-separated allowed Qdrant hostnames                      | unset                                                             |
 
 Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
 
 </details>
+
+### Hosted MCP (Bring Your Own Qdrant)
+
+If you run a public MCP endpoint and want users to supply their own Qdrant
+credentials (e.g., in n8n), enable per-request overrides and send headers.
+
+Server env:
+
+```bash
+MCP_ALLOW_REQUEST_OVERRIDES=true
+MCP_REQUIRE_REQUEST_QDRANT_URL=true
+MCP_REQUIRE_REQUEST_COLLECTION=true
+# Optional hardening
+MCP_QDRANT_HOST_ALLOWLIST=*.qdrant.io
+```
+
+Client headers (n8n MCP node):
+
+- `X-Qdrant-Url`: user Qdrant URL (required)
+- `X-Qdrant-Api-Key`: user Qdrant API key (optional if public)
+- `X-Collection-Name`: user collection (required)
+- `X-Qdrant-Vector-Name`: optional vector name override
+
+If you want to keep server defaults and only allow optional overrides, set
+`MCP_REQUIRE_REQUEST_QDRANT_URL=false` and `MCP_REQUIRE_REQUEST_COLLECTION=false`.
+
+Tip: If you enable request overrides for a public endpoint, do not rely on
+server-side `QDRANT_*` defaults. Require user headers and keep your own
+Qdrant instance network-restricted.
 
 <details>
 <summary>Memory Contract</summary>
