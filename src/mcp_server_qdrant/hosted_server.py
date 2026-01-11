@@ -58,9 +58,9 @@ class HostedQdrantMCPServer(QdrantMCPServer):
             "qdrant_connector",
             default=None,
         )
-        self._request_overrides_var: ContextVar[
-            RequestQdrantOverrides | None
-        ] = ContextVar("qdrant_request_overrides", default=None)
+        self._request_overrides_var: ContextVar[RequestQdrantOverrides | None] = (
+            ContextVar("qdrant_request_overrides", default=None)
+        )
         self._default_qdrant_connector: QdrantConnector | None = None
         self._default_qdrant_url = qdrant_settings.location
         self._default_qdrant_api_key = qdrant_settings.api_key
@@ -156,7 +156,10 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         missing_required: list[str] = []
         if self.request_override_settings.require_request_qdrant_url and not url:
             missing_required.append(self.request_override_settings.qdrant_url_header)
-        if self.request_override_settings.require_request_collection and not collection_name:
+        if (
+            self.request_override_settings.require_request_collection
+            and not collection_name
+        ):
             missing_required.append(
                 self.request_override_settings.collection_name_header
             )
