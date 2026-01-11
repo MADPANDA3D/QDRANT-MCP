@@ -98,3 +98,10 @@ jobs:
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.tag }}
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.version }}
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release_tag.outputs.tag }}
+            org.opencontainers.image.title=QDRANT-MCP
+            org.opencontainers.image.description=Qdrant MCP server container
