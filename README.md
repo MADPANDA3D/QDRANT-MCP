@@ -39,10 +39,10 @@
 - [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://example.com/vps-deploy)
 - [![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://example.com/donate)
 
-### Use the Hosted MCP in n8n
+### Use the MADPANDA3D Hosted MCP in n8n
 
 1. Add **MCP tool node** to your agent.
-2. Add the MCP endpoint URL (your hosted MCP).
+2. Add the MCP endpoint URL: `https://qdrant-mcp.madpanda3d.com/mcp`.
 3. Set **Server transport** to **HTTP streamable**.
 4. Set **Auth** to **Multiple Headers Auth**.
 5. Add headers:
