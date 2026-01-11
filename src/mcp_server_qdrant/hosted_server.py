@@ -9,10 +9,13 @@ from urllib.parse import urlparse
 try:  # FastMCP >= 2.2.11
     from fastmcp.server.dependencies import get_http_headers
 except ImportError:  # pragma: no cover - older FastMCP
+
     def get_http_headers() -> dict[str, str]:
         return {}
 
+
 from mcp.types import EmbeddedResource, ImageContent, TextContent
+
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant.mcp_server import QdrantMCPServer
 from mcp_server_qdrant.qdrant import QdrantConnector
