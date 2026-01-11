@@ -63,7 +63,7 @@
 
 ### Website Builder
 - [Premium](https://www.hostinger.com/cart?product=hosting%3Ahostinger_premium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-f240-7309-b3fe-9f6909fbc769&product_type=website-builder)
-- [Business](https://www.hostinger.com/cart?product=hosting%3Ahostinger_business&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-b8f6-7147-bdc4-7c3c69256ae9&product_type=website-builder)
+- [Business](https://www.hostinger.com/cart?product=hosting%3Ahostinger_business&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-7ce9-70fb-b96c-2184abc56764)
 
 ### Agency Hosting
 - [Startup](https://www.hostinger.com/cart?product=hosting%3Aagency_startup&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-d03c-71de-9acf-08fd4fa911de)
@@ -235,6 +235,49 @@ Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same t
 
 </details>
 
+### Example .env templates
+
+Base (Qdrant + hosted overrides):
+
+```bash
+QDRANT_URL=https://your-qdrant-host:6333
+QDRANT_API_KEY=your-qdrant-api-key
+COLLECTION_NAME=your-collection
+
+# Hosted MCP: require client headers (recommended for public endpoints)
+MCP_ALLOW_REQUEST_OVERRIDES=true
+MCP_REQUIRE_REQUEST_QDRANT_URL=true
+MCP_REQUIRE_REQUEST_COLLECTION=true
+MCP_QDRANT_HOST_ALLOWLIST=["*.qdrant.io"]
+```
+
+FastEmbed (local embeddings, no external API):
+
+```bash
+EMBEDDING_PROVIDER=fastembed
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
+
+OpenAI embeddings:
+
+```bash
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-large
+OPENAI_API_KEY=your-openai-key
+```
+
+OpenAI-compatible embeddings (custom base URL):
+
+```bash
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=your-model-id
+OPENAI_API_KEY=your-openai-compatible-key
+OPENAI_BASE_URL=https://your-openai-compatible-host/v1
+# Optional:
+OPENAI_ORG=
+OPENAI_PROJECT=
+```
+
 ### Hosted MCP (Bring Your Own Qdrant)
 
 If you run a public MCP endpoint and want users to supply their own Qdrant
@@ -263,6 +306,19 @@ If you want to keep server defaults and only allow optional overrides, set
 Tip: If you enable request overrides for a public endpoint, do not rely on
 server-side `QDRANT_*` defaults. Require user headers and keep your own
 Qdrant instance network-restricted.
+
+### n8n setup
+
+1. Add **MCP tool node** to your agent.
+2. Add the MCP endpoint URL.
+3. Set **Server transport** to **HTTP streamable**.
+4. Set **Auth** to **Multiple Headers Auth**.
+5. Add headers:
+   - `X-Qdrant-Url`
+   - `X-Collection-Name`
+   - `X-Qdrant-Api-Key` (required for private Qdrant)
+6. Save the auth credentials.
+7. Set **Tools to include** → **All**.
 
 <details>
 <summary>Memory Contract</summary>
