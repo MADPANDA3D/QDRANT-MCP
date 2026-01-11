@@ -20,7 +20,9 @@ RUN pip install --no-cache-dir uv
 # Install this package from source
 COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src
-RUN uv pip install --system --no-cache-dir .
+COPY .git /app/.git
+RUN uv pip install --system --no-cache-dir . \
+    && rm -rf /app/.git
 
 # Expose the default port for SSE transport
 EXPOSE 8000
