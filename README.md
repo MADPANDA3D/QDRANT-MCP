@@ -50,8 +50,19 @@ n8n setup:
 6. Save the auth credentials.
 7. Set **Tools to include** → **All**.
 
-## Deploy
+## n8n Setup
 
+<p align="center">
+  <img src="./assets/n8n/n8n-qdrant-mcp-setup-step1.jpg" alt="n8n MCP setup step 1" width="900" />
+</p>
+<p align="center">
+  <img src="./assets/n8n/n8n-qdrant-mcp-setup-step2.jpg" alt="n8n MCP setup step 2" width="900" />
+</p>
+<p align="center">
+  <img src="./assets/n8n/n8n-qdrant-mcp-setup-step3.jpg" alt="n8n MCP setup step 3" width="900" />
+</p>
+
+## Deploy
 - [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_4&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-531e-70d3-83f5-e28eb919466d)
 
 ## Quickstart
