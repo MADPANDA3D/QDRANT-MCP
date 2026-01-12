@@ -5,6 +5,9 @@ import json
 import logging
 import math
 import uuid
+from collections.abc import Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -12,6 +15,11 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from fastmcp import Context, FastMCP
+try:  # FastMCP >= 2.2.11
+    from fastmcp.server.dependencies import get_http_headers
+except ImportError:  # pragma: no cover - older FastMCP
+    def get_http_headers() -> dict[str, str]:
+        return {}
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 from pydantic import Field
 from qdrant_client import models
@@ -47,10 +55,19 @@ from mcp_server_qdrant.settings import (
     EmbeddingProviderSettings,
     MemorySettings,
     QdrantSettings,
+    RequestOverrideSettings,
     ToolSettings,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RequestQdrantOverrides:
+    url: str | None
+    api_key: str | None
+    collection_name: str | None
+    vector_name: str | None
 
 
 # FastMCP is an alternative interface for declaring the capabilities
@@ -64,6 +81,7 @@ class QdrantMCPServer(FastMCP):
         self,
         tool_settings: ToolSettings,
         qdrant_settings: QdrantSettings,
+        request_override_settings: RequestOverrideSettings | None = None,
         memory_settings: MemorySettings | None = None,
         embedding_provider_settings: EmbeddingProviderSettings | None = None,
         embedding_provider: EmbeddingProvider | None = None,
@@ -73,6 +91,9 @@ class QdrantMCPServer(FastMCP):
     ):
         self.tool_settings = tool_settings
         self.qdrant_settings = qdrant_settings
+        self.request_override_settings = (
+            request_override_settings or RequestOverrideSettings()
+        )
         self.memory_settings = memory_settings or MemorySettings()
 
         if embedding_provider_settings and embedding_provider:
@@ -106,7 +127,7 @@ class QdrantMCPServer(FastMCP):
         field_indexes.update(make_indexes(qdrant_settings.filterable_fields_dict()))
         self.payload_indexes = dict(field_indexes)
 
-        self.qdrant_connector = QdrantConnector(
+        self._default_qdrant_connector = QdrantConnector(
             qdrant_settings.location,
             qdrant_settings.api_key,
             qdrant_settings.collection_name,
@@ -115,12 +136,111 @@ class QdrantMCPServer(FastMCP):
             qdrant_settings.local_path,
             field_indexes,
         )
+        self._connector_var: ContextVar[QdrantConnector | None] = ContextVar(
+            "qdrant_connector",
+            default=None,
+        )
+        self._request_overrides_var: ContextVar[
+            RequestQdrantOverrides | None
+        ] = ContextVar("qdrant_request_overrides", default=None)
         self._jobs: dict[str, dict[str, Any]] = {}
         self._job_tasks: dict[str, asyncio.Task] = {}
 
         super().__init__(name=name, instructions=instructions, **settings)
 
         self.setup_tools()
+
+    @property
+    def qdrant_connector(self) -> QdrantConnector:
+        connector = self._connector_var.get()
+        return connector or self._default_qdrant_connector
+
+    def _normalize_headers(self, headers: Mapping[str, Any] | None) -> dict[str, str]:
+        if not headers:
+            return {}
+        normalized: dict[str, str] = {}
+        for key, value in headers.items():
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                if not value:
+                    continue
+                value = value[0]
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", "ignore")
+            normalized[str(key).lower()] = str(value).strip()
+        return normalized
+
+    def _host_allowed(self, host: str) -> bool:
+        allowlist = self.request_override_settings.qdrant_host_allowlist
+        if not allowlist:
+            return True
+        host = host.lower()
+        for allowed in allowlist:
+            if allowed.startswith("*.") and host.endswith(allowed[1:]):
+                return True
+            if host == allowed:
+                return True
+        return False
+
+    def _build_request_overrides(
+        self, headers: Mapping[str, Any] | None
+    ) -> RequestQdrantOverrides | None:
+        if not self.request_override_settings.allow_request_overrides:
+            return None
+
+        normalized = self._normalize_headers(headers)
+
+        url = normalized.get(self.request_override_settings.qdrant_url_header, "")
+        api_key = normalized.get(
+            self.request_override_settings.qdrant_api_key_header, ""
+        )
+        collection_name = normalized.get(
+            self.request_override_settings.collection_name_header, ""
+        )
+        vector_name = normalized.get(
+            self.request_override_settings.vector_name_header, ""
+        )
+
+        missing_required: list[str] = []
+        if self.request_override_settings.require_request_qdrant_url and not url:
+            missing_required.append(self.request_override_settings.qdrant_url_header)
+        if self.request_override_settings.require_request_collection and not collection_name:
+            missing_required.append(
+                self.request_override_settings.collection_name_header
+            )
+        if missing_required:
+            raise ValueError(
+                "Missing required header(s): "
+                + ", ".join(missing_required)
+                + "."
+            )
+
+        if not any([url, api_key, collection_name, vector_name]):
+            return None
+
+        if url:
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"}:
+                raise ValueError("Qdrant URL must start with http:// or https://")
+            host = parsed.hostname
+            if not host:
+                raise ValueError("Qdrant URL must include a hostname.")
+            if not self._host_allowed(host):
+                raise ValueError("Qdrant host is not allowed.")
+
+        return RequestQdrantOverrides(
+            url=url or None,
+            api_key=api_key or None,
+            collection_name=collection_name or None,
+            vector_name=vector_name or None,
+        )
+
+    def _get_default_collection_name(self) -> str | None:
+        overrides = self._request_overrides_var.get()
+        if overrides and overrides.collection_name:
+            return overrides.collection_name
+        return self.qdrant_settings.collection_name
 
     async def _mcp_call_tool(
         self, key: str, arguments: dict[str, Any]
@@ -129,6 +249,22 @@ class QdrantMCPServer(FastMCP):
         Normalize tool arguments before validation to tolerate MCP clients
         that wrap arguments inside Airtable-like records (id/createdTime/fields).
         """
+        connector_token = None
+        overrides_token = None
+        overrides = self._build_request_overrides(get_http_headers())
+        if overrides is not None:
+            connector = QdrantConnector(
+                overrides.url,
+                overrides.api_key,
+                overrides.collection_name,
+                self.embedding_provider,
+                overrides.vector_name,
+                None,
+                self.payload_indexes,
+            )
+            connector_token = self._connector_var.set(connector)
+            overrides_token = self._request_overrides_var.set(overrides)
+
         if isinstance(arguments, dict) and self._tool_manager.has_tool(key):
             tool = self._tool_manager.get_tool(key)
             allowed = set(tool.parameters.get("properties", {}).keys())
@@ -150,7 +286,13 @@ class QdrantMCPServer(FastMCP):
                 raise ValueError(f"Unknown tool parameters: {sorted(unknown)}")
             arguments = filtered
 
-        return await super()._mcp_call_tool(key, arguments)
+        try:
+            return await super()._mcp_call_tool(key, arguments)
+        finally:
+            if overrides_token is not None:
+                self._request_overrides_var.reset(overrides_token)
+            if connector_token is not None:
+                self._connector_var.reset(connector_token)
 
     def format_entry(self, entry: Entry) -> str:
         """
@@ -193,16 +335,18 @@ class QdrantMCPServer(FastMCP):
             name = collection_name.strip() if collection_name else ""
             if name:
                 return name
-            if self.qdrant_settings.collection_name:
-                return self.qdrant_settings.collection_name
+            default_name = self._get_default_collection_name()
+            if default_name:
+                return default_name
             raise ValueError("collection_name is required")
 
         def resolve_health_collection(collection_name: str | None) -> str:
             name = collection_name.strip() if collection_name else ""
             if name:
                 return name
-            if self.qdrant_settings.collection_name:
-                return self.qdrant_settings.collection_name
+            default_name = self._get_default_collection_name()
+            if default_name:
+                return default_name
             if self.memory_settings.health_check_collection:
                 return self.memory_settings.health_check_collection
             return "jarvis-knowledge-base"
@@ -4668,8 +4812,10 @@ class QdrantMCPServer(FastMCP):
                 raise ValueError(f"Unknown job_type '{job_type}'.")
 
             args = dict(job_args or {})
-            if "collection_name" not in args and self.qdrant_settings.collection_name:
-                args["collection_name"] = self.qdrant_settings.collection_name
+            if "collection_name" not in args:
+                default_collection = self._get_default_collection_name()
+                if default_collection:
+                    args["collection_name"] = default_collection
 
             job_id = uuid.uuid4().hex
             now = datetime.now(timezone.utc).isoformat()
@@ -4841,7 +4987,10 @@ class QdrantMCPServer(FastMCP):
         elif not self.qdrant_settings.allow_arbitrary_filter:
             find_foo = make_partial_function(find_foo, {"query_filter": None})
 
-        if self.qdrant_settings.collection_name:
+        if (
+            self.qdrant_settings.collection_name
+            and not self.request_override_settings.allow_request_overrides
+        ):
             find_foo = make_partial_function(
                 find_foo, {"collection_name": self.qdrant_settings.collection_name}
             )

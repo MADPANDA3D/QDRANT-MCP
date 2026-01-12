@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv for package management
 RUN pip install --no-cache-dir uv
 
+# Provide a version for setuptools-scm builds outside a git checkout
+ARG PACKAGE_VERSION=0.0.0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${PACKAGE_VERSION}
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_MAD_MCP_QDRANT=${PACKAGE_VERSION}
+
 # Install this package from source
 COPY pyproject.toml uv.lock README.md /app/
 COPY src /app/src

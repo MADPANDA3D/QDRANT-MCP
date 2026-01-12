@@ -315,7 +315,7 @@ When a duplicate `text_hash` is found in the same `scope`, the server updates
 <details>
 <summary>Maintenance Playbooks</summary>
 
-See `MAINTENANCE_PLAYBOOKS.md` for recommended maintenance flows.
+See `docs/MAINTENANCE_PLAYBOOKS.md` for recommended maintenance flows.
 
 </details>
 
