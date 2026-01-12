@@ -15,11 +15,15 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from fastmcp import Context, FastMCP
+
 try:  # FastMCP >= 2.2.11
     from fastmcp.server.dependencies import get_http_headers
 except ImportError:  # pragma: no cover - older FastMCP
+
     def get_http_headers() -> dict[str, str]:
         return {}
+
+
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 from pydantic import Field
 from qdrant_client import models
@@ -140,9 +144,9 @@ class QdrantMCPServer(FastMCP):
             "qdrant_connector",
             default=None,
         )
-        self._request_overrides_var: ContextVar[
-            RequestQdrantOverrides | None
-        ] = ContextVar("qdrant_request_overrides", default=None)
+        self._request_overrides_var: ContextVar[RequestQdrantOverrides | None] = (
+            ContextVar("qdrant_request_overrides", default=None)
+        )
         self._jobs: dict[str, dict[str, Any]] = {}
         self._job_tasks: dict[str, asyncio.Task] = {}
 
@@ -205,15 +209,16 @@ class QdrantMCPServer(FastMCP):
         missing_required: list[str] = []
         if self.request_override_settings.require_request_qdrant_url and not url:
             missing_required.append(self.request_override_settings.qdrant_url_header)
-        if self.request_override_settings.require_request_collection and not collection_name:
+        if (
+            self.request_override_settings.require_request_collection
+            and not collection_name
+        ):
             missing_required.append(
                 self.request_override_settings.collection_name_header
             )
         if missing_required:
             raise ValueError(
-                "Missing required header(s): "
-                + ", ".join(missing_required)
-                + "."
+                "Missing required header(s): " + ", ".join(missing_required) + "."
             )
 
         if not any([url, api_key, collection_name, vector_name]):

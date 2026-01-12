@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,7 +15,7 @@ except ImportError:  # pragma: no cover - older FastMCP
 from mcp.types import EmbeddedResource, ImageContent, TextContent
 
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
-from mcp_server_qdrant.mcp_server import QdrantMCPServer
+from mcp_server_qdrant.mcp_server import QdrantMCPServer, RequestQdrantOverrides
 from mcp_server_qdrant.qdrant import QdrantConnector
 from mcp_server_qdrant.settings import (
     EmbeddingProviderSettings,
@@ -26,15 +24,6 @@ from mcp_server_qdrant.settings import (
     RequestOverrideSettings,
     ToolSettings,
 )
-
-
-@dataclass
-class RequestQdrantOverrides:
-    url: str | None
-    api_key: str | None
-    collection_name: str | None
-    vector_name: str | None
-    local_path: str | None
 
 
 class HostedQdrantMCPServer(QdrantMCPServer):
@@ -57,14 +46,6 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         self.request_override_settings = (
             request_override_settings or RequestOverrideSettings()
         )
-        self._connector_var: ContextVar[QdrantConnector | None] = ContextVar(
-            "qdrant_connector",
-            default=None,
-        )
-        self._request_overrides_var: ContextVar[RequestQdrantOverrides | None] = (
-            ContextVar("qdrant_request_overrides", default=None)
-        )
-        self._default_qdrant_connector: QdrantConnector | None = None
         self._default_qdrant_url = qdrant_settings.location
         self._default_qdrant_api_key = qdrant_settings.api_key
         self._default_collection_name = qdrant_settings.collection_name
@@ -177,7 +158,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         effective_url = url or self._default_qdrant_url
         effective_api_key = api_key or self._default_qdrant_api_key
         effective_collection = collection_name or self._default_collection_name
-        effective_local_path = None if url else self._default_local_path
+        effective_local_path = None if effective_url else self._default_local_path
 
         if effective_url:
             parsed = urlparse(effective_url)
@@ -196,7 +177,6 @@ class HostedQdrantMCPServer(QdrantMCPServer):
             api_key=effective_api_key,
             collection_name=effective_collection,
             vector_name=vector_name or None,
-            local_path=effective_local_path,
         )
 
     def _inject_collection_name(
@@ -219,13 +199,14 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         overrides_token = None
         overrides = self._build_request_overrides(get_http_headers())
         if overrides is not None:
+            effective_local_path = None if overrides.url else self._default_local_path
             connector = QdrantConnector(
                 overrides.url,
                 overrides.api_key,
                 overrides.collection_name,
                 self.embedding_provider,
                 overrides.vector_name,
-                overrides.local_path,
+                effective_local_path,
                 self.payload_indexes,
             )
             connector_token = self._connector_var.set(connector)
