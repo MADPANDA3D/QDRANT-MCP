@@ -1,26 +1,19 @@
 <p align="center">
-  <img src="assets/brand/header.jpg" alt="MADPANDA3D QDRANT MCP header" />
+  <img src="./assets/brand/header.jpg" alt="MADPANDA3D QDRANT MCP header" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/actions/workflows/pre-commit.yaml">
-    <img src="https://img.shields.io/github/actions/workflow/status/MADPANDA3D/QDRANT-MCP/pre-commit.yaml?branch=main" alt="pre-commit status" />
-  </a>
-  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/actions/workflows/pytest.yaml">
-    <img src="https://img.shields.io/github/actions/workflow/status/MADPANDA3D/QDRANT-MCP/pytest.yaml?branch=main" alt="tests status" />
-  </a>
-  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/releases">
-    <img src="https://img.shields.io/github/v/release/MADPANDA3D/QDRANT-MCP?display_name=tag" alt="release" />
-  </a>
-  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/MADPANDA3D/QDRANT-MCP" alt="license" />
-  </a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0 License" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" /></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-Server-000000" alt="MCP Server" /></a>
+  <a href="https://qdrant.tech/"><img src="https://img.shields.io/badge/Qdrant-Connected-ff6f00" alt="Qdrant" /></a>
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/releases"><img src="https://img.shields.io/github/v/release/MADPANDA3D/QDRANT-MCP?display_name=tag&color=0e8a16" alt="release" /></a>
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP/issues"><img src="https://img.shields.io/github/issues/MADPANDA3D/QDRANT-MCP?color=ff8c00" alt="open issues" /></a>
+  <a href="https://github.com/MADPANDA3D/QDRANT-MCP"><img src="https://img.shields.io/github/stars/MADPANDA3D/QDRANT-MCP?color=f1c40f" alt="stars" /></a>
 </p>
 
 <h1 align="center"><strong>MADPANDA3D QDRANT MCP</strong></h1>
-<p align="center">
-  <strong>Manage your Vector Database how you see fit</strong>
-</p>
+<p align="center"><strong>Manage your Vector Database how you see fit</strong></p>
 <p align="center">
   MADPANDA3D QDRANT MCP is a production-ready Model Context Protocol server for Qdrant.
   It turns your vector store into a managed memory layer with structured controls for
@@ -32,19 +25,22 @@
   operational guardrails so agents can manage your database at scale without chaos.
 </p>
 
-## Deploy
+## Overview
 
-- [![Deploy on Railway](https://railway.app/button.svg)](https://example.com/railway-deploy) (coming soon)
-- [![Deploy with Vercel](https://vercel.com/button)](https://example.com/vercel-deploy) (coming soon)
-- [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_4&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-531e-70d3-83f5-e28eb919466d)
-- [![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://donate.stripe.com/cNidRbdkAbdP8iU7SD4ko0b)
+This server is designed for production workloads and supports hosted header-auth access for clients like n8n, Claude Desktop, and other MCP-capable agents.
 
-Get a VPS before Deploying.
+## Hosted MCP (Header Auth)
 
-### Use the MADPANDA3D Hosted MCP in n8n
+Use the MADPANDA3D hosted endpoint:
+
+```
+https://qdrant-mcp.madpanda3d.com/mcp
+```
+
+n8n setup:
 
 1. Add **MCP tool node** to your agent.
-2. Add the MCP endpoint URL: `https://qdrant-mcp.madpanda3d.com/mcp`.
+2. Add the MCP endpoint URL.
 3. Set **Server transport** to **HTTP streamable**.
 4. Set **Auth** to **Multiple Headers Auth**.
 5. Add headers:
@@ -54,47 +50,9 @@ Get a VPS before Deploying.
 6. Save the auth credentials.
 7. Set **Tools to include** → **All**.
 
-<details>
-<summary>DEPLOY ON VPS</summary>
+## Deploy
 
-- [![Hostinger VPS KVM 1](https://img.shields.io/badge/Hostinger_VPS_KVM_1-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_1&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-d783-7057-85d2-27de6e01e2c5)
-- [![Hostinger VPS KVM 2](https://img.shields.io/badge/Hostinger_VPS_KVM_2-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_2&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-26cf-7333-b6d7-692e17bf8ce1)
-- [![Hostinger VPS KVM 4](https://img.shields.io/badge/Hostinger_VPS_KVM_4-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_4&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-531e-70d3-83f5-e28eb919466d)
-- [![Hostinger VPS KVM 8](https://img.shields.io/badge/Hostinger_VPS_KVM_8-Deploy-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_8&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-7ce9-70fb-b96c-2184abc56764)
-
-</details>
-
-<details>
-<summary>Hostinger Partner Links</summary>
-
-### Cloud Hosting
-- [Cloud Economy](https://www.hostinger.com/cart?product=hosting%3Acloud_economy&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-e7fa-7358-9ff0-f9ba2e8d6e36)
-- [Cloud Professional](https://www.hostinger.com/cart?product=hosting%3Acloud_professional&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-20fd-70bc-959e-a1f2cd9a69a6)
-- [Cloud Enterprise](https://www.hostinger.com/cart?product=hosting%3Acloud_enterprise&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-5972-72e4-850f-40d618988dc1)
-
-### Web Hosting
-- [Premium](https://www.hostinger.com/cart?product=hosting%3Ahostinger_premium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-4c21-7199-9918-8f31a3f6a0d9)
-- [Business](https://www.hostinger.com/cart?product=hosting%3Ahostinger_business&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-1135-72ba-acbb-13e0e7550db0)
-
-### Website Builder
-- [Premium](https://www.hostinger.com/cart?product=hosting%3Ahostinger_premium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-f240-7309-b3fe-9f6909fbc769&product_type=website-builder)
-- [Business](https://www.hostinger.com/cart?product=hosting%3Ahostinger_business&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-7ce9-70fb-b96c-2184abc56764)
-
-### Agency Hosting
-- [Startup](https://www.hostinger.com/cart?product=hosting%3Aagency_startup&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-d03c-71de-9acf-08fd4fa911de)
-- [Growth](https://www.hostinger.com/cart?product=hosting%3Aagency_growth&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-6af4-731f-8947-f1458f07fa5b)
-- [Professional](https://www.hostinger.com/cart?product=hosting%3Aagency_professional&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-03fb-73f8-9910-044a0a33393a)
-
-### Email
-- [Business Pro](https://www.hostinger.com/cart?product=hostinger_mail%3Apro&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a493-5c27-727b-b7f9-8747ffb4e5ee)
-- [Business Premium](https://www.hostinger.com/cart?product=hostinger_mail%3Apremium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a493-a3fc-72b8-a961-94ed6e1c70e6)
-
-### Reach
-- [Reach 500](https://www.hostinger.com/cart?product=reach%3A500&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a494-3ebf-7367-b409-9948de50a297)
-- [Reach 1000](https://www.hostinger.com/cart?product=reach%3A1000&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a494-8bb9-726e-bb8d-9de9a72a3c21)
-- [Reach 2500](https://www.hostinger.com/cart?product=reach%3A2500&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a494-c9c1-7191-b600-cafa2e9adafc)
-
-</details>
+- [![Deploy to VPS](https://img.shields.io/badge/Deploy_to_VPS-Hostinger-blue?style=for-the-badge&logo=linux&logoColor=white)](https://www.hostinger.com/cart?product=vps%3Avps_kvm_4&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-531e-70d3-83f5-e28eb919466d)
 
 ## Quickstart
 
@@ -209,42 +167,42 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 <details>
 <summary>Environment Variables</summary>
 
-| Name                       | Description                                                         | Default Value                                                     |
-|----------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
-| `QDRANT_URL`               | URL of the Qdrant server                                            | None                                                              |
-| `QDRANT_API_KEY`           | API key for the Qdrant server                                       | None                                                              |
-| `COLLECTION_NAME`          | Name of the default collection to use.                              | None                                                              |
-| `QDRANT_VECTOR_NAME`       | Override vector name used by the MCP server                         | None                                                              |
-| `QDRANT_LOCAL_PATH`        | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
-| `EMBEDDING_PROVIDER`       | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
-| `EMBEDDING_MODEL`          | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
-| `EMBEDDING_VECTOR_SIZE`    | Vector size override (required for unknown OpenAI models)           | unset                                                             |
-| `EMBEDDING_VERSION`        | Embedding version label stored with each memory                     | unset                                                             |
-| `OPENAI_API_KEY`           | OpenAI API key (required for `openai` provider)                     | unset                                                             |
-| `OPENAI_BASE_URL`          | OpenAI-compatible base URL (optional)                               | unset                                                             |
-| `OPENAI_ORG`               | OpenAI organization ID (optional)                                   | unset                                                             |
-| `OPENAI_PROJECT`           | OpenAI project ID (optional)                                        | unset                                                             |
-| `TOOL_STORE_DESCRIPTION`   | Custom description for the store tool                               | See default in `src/mcp_server_qdrant/settings.py`               |
-| `TOOL_FIND_DESCRIPTION`    | Custom description for the find tool                                | See default in `src/mcp_server_qdrant/settings.py`               |
-| `MCP_ADMIN_TOOLS_ENABLED`  | Enable admin-only tools (optimizer updates)                         | `false`                                                           |
-| `MCP_MUTATIONS_REQUIRE_ADMIN` | Require admin access for mutating tools                         | `false`                                                           |
-| `MCP_MAX_BATCH_SIZE`       | Max batch size for bulk operations                                  | `500`                                                             |
-| `MCP_MAX_POINT_IDS`        | Max point id list size                                              | `500`                                                             |
-| `MCP_STRICT_PARAMS`        | Reject unknown keys/filters and oversized text                      | `false`                                                           |
-| `MCP_MAX_TEXT_LENGTH`      | Max text length before chunking                                     | `8000`                                                            |
-| `MCP_DEDUPE_ACTION`        | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
-| `MCP_INGEST_VALIDATION_MODE` | Validation mode (`allow`, `reject`, `quarantine`)                 | `allow`                                                           |
-| `MCP_QUARANTINE_COLLECTION` | Collection name for quarantined memories                           | `jarvis-quarantine`                                               |
-| `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                              | unset                                                             |
-| `MCP_SERVER_VERSION`       | Optional git SHA for telemetry                                      | unset                                                             |
-| `MCP_ALLOW_REQUEST_OVERRIDES` | Allow per-request Qdrant headers                                 | `false`                                                           |
-| `MCP_REQUIRE_REQUEST_QDRANT_URL` | Require `X-Qdrant-Url` when overrides enabled               | `true`                                                            |
-| `MCP_REQUIRE_REQUEST_COLLECTION` | Require `X-Collection-Name` when overrides enabled         | `true`                                                            |
-| `MCP_QDRANT_URL_HEADER`     | Header name for Qdrant URL                                          | `x-qdrant-url`                                                    |
-| `MCP_QDRANT_API_KEY_HEADER` | Header name for Qdrant API key                                      | `x-qdrant-api-key`                                                |
-| `MCP_COLLECTION_NAME_HEADER` | Header name for collection name                                   | `x-collection-name`                                               |
-| `MCP_QDRANT_VECTOR_NAME_HEADER` | Header name for vector name                                   | `x-qdrant-vector-name`                                            |
-| `MCP_QDRANT_HOST_ALLOWLIST` | Comma/space-separated allowed Qdrant hostnames                      | unset                                                             |
+| Name                          | Description                                                         | Default Value                                                     |
+|-------------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
+| `QDRANT_URL`                  | URL of the Qdrant server                                            | None                                                              |
+| `QDRANT_API_KEY`              | API key for the Qdrant server                                       | None                                                              |
+| `COLLECTION_NAME`             | Name of the default collection to use.                              | None                                                              |
+| `QDRANT_VECTOR_NAME`          | Override vector name used by the MCP server                         | None                                                              |
+| `QDRANT_LOCAL_PATH`           | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
+| `EMBEDDING_PROVIDER`          | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
+| `EMBEDDING_MODEL`             | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
+| `EMBEDDING_VECTOR_SIZE`       | Vector size override (required for unknown OpenAI models)           | unset                                                             |
+| `EMBEDDING_VERSION`           | Embedding version label stored with each memory                     | unset                                                             |
+| `OPENAI_API_KEY`              | OpenAI API key (required for `openai` provider)                     | unset                                                             |
+| `OPENAI_BASE_URL`             | OpenAI-compatible base URL (optional)                               | unset                                                             |
+| `OPENAI_ORG`                  | OpenAI organization ID (optional)                                   | unset                                                             |
+| `OPENAI_PROJECT`              | OpenAI project ID (optional)                                        | unset                                                             |
+| `TOOL_STORE_DESCRIPTION`      | Custom description for the store tool                               | See default in `src/mcp_server_qdrant/settings.py`               |
+| `TOOL_FIND_DESCRIPTION`       | Custom description for the find tool                                | See default in `src/mcp_server_qdrant/settings.py`               |
+| `MCP_ADMIN_TOOLS_ENABLED`     | Enable admin-only tools (optimizer updates)                         | `false`                                                           |
+| `MCP_MUTATIONS_REQUIRE_ADMIN` | Require admin access for mutating tools                             | `false`                                                           |
+| `MCP_MAX_BATCH_SIZE`          | Max batch size for bulk operations                                  | `500`                                                             |
+| `MCP_MAX_POINT_IDS`           | Max point id list size                                              | `500`                                                             |
+| `MCP_STRICT_PARAMS`           | Reject unknown keys/filters and oversized text                      | `false`                                                           |
+| `MCP_MAX_TEXT_LENGTH`         | Max text length before chunking                                     | `8000`                                                            |
+| `MCP_DEDUPE_ACTION`           | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
+| `MCP_INGEST_VALIDATION_MODE`  | Validation mode (`allow`, `reject`, `quarantine`)                   | `allow`                                                           |
+| `MCP_QUARANTINE_COLLECTION`   | Collection name for quarantined memories                            | `jarvis-quarantine`                                               |
+| `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                                 | unset                                                             |
+| `MCP_SERVER_VERSION`          | Optional git SHA for telemetry                                      | unset                                                             |
+| `MCP_ALLOW_REQUEST_OVERRIDES` | Allow per-request Qdrant headers                                    | `false`                                                           |
+| `MCP_REQUIRE_REQUEST_QDRANT_URL` | Require `X-Qdrant-Url` when overrides enabled                    | `true`                                                            |
+| `MCP_REQUIRE_REQUEST_COLLECTION` | Require `X-Collection-Name` when overrides enabled              | `true`                                                            |
+| `MCP_QDRANT_URL_HEADER`        | Header name for Qdrant URL                                         | `x-qdrant-url`                                                    |
+| `MCP_QDRANT_API_KEY_HEADER`    | Header name for Qdrant API key                                     | `x-qdrant-api-key`                                                |
+| `MCP_COLLECTION_NAME_HEADER`   | Header name for collection name                                    | `x-collection-name`                                               |
+| `MCP_QDRANT_VECTOR_NAME_HEADER` | Header name for vector name                                       | `x-qdrant-vector-name`                                            |
+| `MCP_QDRANT_HOST_ALLOWLIST`    | Comma/space-separated allowed Qdrant hostnames                     | unset                                                             |
 
 Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
 
@@ -322,19 +280,6 @@ Tip: If you enable request overrides for a public endpoint, do not rely on
 server-side `QDRANT_*` defaults. Require user headers and keep your own
 Qdrant instance network-restricted.
 
-### n8n setup
-
-1. Add **MCP tool node** to your agent.
-2. Add the MCP endpoint URL.
-3. Set **Server transport** to **HTTP streamable**.
-4. Set **Auth** to **Multiple Headers Auth**.
-5. Add headers:
-   - `X-Qdrant-Url`
-   - `X-Collection-Name`
-   - `X-Qdrant-Api-Key` (required for private Qdrant)
-6. Save the auth credentials.
-7. Set **Tools to include** → **All**.
-
 <details>
 <summary>Memory Contract</summary>
 
@@ -368,11 +313,60 @@ release workflow, and a release is created only when commit messages warrant a v
 
 ## License
 
-MIT
+Apache-2.0.
+
+## Support
+
+[![Donate to the Project](https://img.shields.io/badge/Donate_to_the_Project-Support_Development-ff69b4?style=for-the-badge&logo=heart&logoColor=white)](https://donate.stripe.com/cNidRbdkAbdP8iU7SD4ko0b)
+
+## Affiliate Links
+
+<details>
+<summary>Services I use (affiliate)</summary>
+
+Using these links helps support continued development.
+
+### Hostinger VPS
+- [KVM 1](https://www.hostinger.com/cart?product=vps%3Avps_kvm_1&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-d783-7057-85d2-27de6e01e2c5)
+- [KVM 2](https://www.hostinger.com/cart?product=vps%3Avps_kvm_2&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-26cf-7333-b6d7-692e17bf8ce1)
+- [KVM 4](https://www.hostinger.com/cart?product=vps%3Avps_kvm_4&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-531e-70d3-83f5-e28eb919466d)
+- [KVM 8](https://www.hostinger.com/cart?product=vps%3Avps_kvm_8&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-7ce9-70fb-b96c-2184abc56764)
+
+### Cloud Hosting
+- [Cloud Economy](https://www.hostinger.com/cart?product=hosting%3Acloud_economy&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-e7fa-7358-9ff0-f9ba2e8d6e36)
+- [Cloud Professional](https://www.hostinger.com/cart?product=hosting%3Acloud_professional&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-20fd-70bc-959e-a1f2cd9a69a6)
+- [Cloud Enterprise](https://www.hostinger.com/cart?product=hosting%3Acloud_enterprise&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-5972-72e4-850f-40d618988dc1)
+
+### Web Hosting
+- [Premium](https://www.hostinger.com/cart?product=hosting%3Ahostinger_premium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-4c21-7199-9918-8f31a3f6a0d9)
+- [Business](https://www.hostinger.com/cart?product=hosting%3Ahostinger_business&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a48f-1135-72ba-acbb-13e0e7550db0)
+
+### Website Builder
+- [Premium](https://www.hostinger.com/cart?product=hosting%3Ahostinger_premium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-f240-7309-b3fe-9f6909fbc769&product_type=website-builder)
+- [Business](https://www.hostinger.com/cart?product=hosting%3Ahostinger_business&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a492-7ce9-70fb-b96c-2184abc56764)
+
+### Agency Hosting
+- [Startup](https://www.hostinger.com/cart?product=hosting%3Aagency_startup&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a490-d03c-71de-9acf-08fd4fa911de)
+- [Growth](https://www.hostinger.com/cart?product=hosting%3Aagency_growth&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-6af4-731f-8947-f1458f07fa5b)
+- [Professional](https://www.hostinger.com/cart?product=hosting%3Aagency_professional&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a491-03fb-73f8-9910-044a0a33393a)
+
+### Email
+- [Business Pro](https://www.hostinger.com/cart?product=hostinger_mail%3Apro&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a493-5c27-727b-b7f9-8747ffb4e5ee)
+- [Business Premium](https://www.hostinger.com/cart?product=hostinger_mail%3Apremium&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a493-a3fc-72b8-a961-94ed6e1c70e6)
+
+### Reach
+- [Reach 500](https://www.hostinger.com/cart?product=reach%3A500&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a494-3ebf-7367-b409-9948de50a297)
+- [Reach 1000](https://www.hostinger.com/cart?product=reach%3A1000&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a494-8bb9-726e-bb8d-9de9a72a3c21)
+- [Reach 2500](https://www.hostinger.com/cart?product=reach%3A2500&period=12&referral_type=cart_link&REFERRALCODE=ZUWMADPANOFE&referral_id=0199a494-c9c1-7191-b600-cafa2e9adafc)
+
+</details>
+
+## Contact
+
+Open an issue in `MADPANDA3D/QDRANT-MCP`.
 
 <p align="center">
-  <img src="assets/brand/logo.jpeg" alt="MADPANDA3D logo" width="140" />
-</p>
-<p align="center">
+  <img src="https://assets.zyrosite.com/cdn-cgi/image/format=auto,w=316,fit=crop,q=95/dJo56xnDoJCnbgxg/official-logo-mxBMZGQ8Owc8p2M2.jpeg" width="160" alt="MADPANDA3D logo" />
+  <br />
   <strong>MADPANDA3D</strong>
 </p>
