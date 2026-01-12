@@ -52,8 +52,6 @@ jobs:
         run: |
           TAG="$(git tag --points-at HEAD | grep '^v' | head -n 1 || true)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          VERSION="${TAG#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup Python
         if: steps.release_tag.outputs.tag != ''
@@ -92,16 +90,6 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          build-args: |
-            PACKAGE_VERSION=${{ steps.release_tag.outputs.version }}
           tags: |
-            ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.tag }}
-            ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:${{ steps.release_tag.outputs.version }}
-            ghcr.io/${{ env.GH_OWNER_LOWER }}/mcp-server-qdrant:latest
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.url=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.release_tag.outputs.tag }}
-            org.opencontainers.image.title=QDRANT-MCP
-            org.opencontainers.image.description=Qdrant MCP server container
+            ghcr.io/${{ env.GH_OWNER_LOWER }}/mad-mcp-qdrant:${{ steps.release_tag.outputs.tag }}
+            ghcr.io/${{ env.GH_OWNER_LOWER }}/mad-mcp-qdrant:latest
