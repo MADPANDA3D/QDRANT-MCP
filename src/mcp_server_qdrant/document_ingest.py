@@ -164,25 +164,92 @@ def _extract_docx_sections_sync(data: bytes) -> ExtractionResult:
     return ExtractionResult(sections=sections, title_hint=title_hint)
 
 
+def _extract_pdf_text_with_pdftotext(data: bytes) -> tuple[str, list[str]]:
+    warnings: list[str] = []
+    pdf_path = None
+    txt_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as pdf_file:
+            pdf_file.write(data)
+            pdf_file.flush()
+            pdf_path = pdf_file.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as txt_file:
+            txt_path = txt_file.name
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-enc", "UTF-8", pdf_path, txt_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - binary missing
+        warnings.append("pdftotext is required for PDF fallback extraction.")
+        return "", warnings
+    finally:
+        if pdf_path and os.path.exists(pdf_path):
+            try:
+                os.unlink(pdf_path)
+            except OSError:
+                warnings.append("Failed to remove temporary PDF file.")
+
+    if result.returncode != 0:
+        warnings.append(
+            f"pdftotext exited with code {result.returncode}: "
+            f"{result.stderr.decode('utf-8', errors='replace').strip()}"
+        )
+
+    output_bytes = b""
+    if txt_path and os.path.exists(txt_path):
+        try:
+            with open(txt_path, "rb") as handle:
+                output_bytes = handle.read()
+        except OSError:
+            warnings.append("Failed to read pdftotext output.")
+    else:
+        warnings.append("pdftotext produced no output.")
+
+    if txt_path and os.path.exists(txt_path):
+        try:
+            os.unlink(txt_path)
+        except OSError:
+            warnings.append("Failed to remove temporary pdftotext output.")
+
+    text, decode_warnings = decode_bytes_to_text(output_bytes)
+    warnings.extend(decode_warnings)
+    return text, warnings
+
+
 def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
     try:
         from pypdf import PdfReader  # type: ignore
     except ImportError as exc:  # pragma: no cover - dependency missing
         raise RuntimeError("pypdf is required for .pdf files.") from exc
 
-    reader = PdfReader(io.BytesIO(data))
-    page_count = len(reader.pages)
     page_texts: list[str] = []
     empty_pages: list[int] = []
     warnings: list[str] = []
+    page_count: int | None = None
 
-    for idx, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        if not text.strip():
-            empty_pages.append(idx)
-        page_texts.append(text)
+    try:
+        reader = PdfReader(io.BytesIO(data), strict=False)
+        page_count = len(reader.pages)
+    except Exception as exc:  # pragma: no cover - PDF parsing errors vary
+        warnings.append(f"pypdf failed to read PDF: {exc}")
+        reader = None
 
-    if ocr and empty_pages:
+    if reader is not None:
+        for idx, page in enumerate(reader.pages):
+            try:
+                text = page.extract_text() or ""
+            except Exception as exc:  # pragma: no cover - PDF parsing errors vary
+                warnings.append(
+                    f"PDF text extraction failed for page {idx + 1}: {exc}"
+                )
+                text = ""
+            if not text.strip():
+                empty_pages.append(idx)
+            page_texts.append(text)
+
+    if ocr and (empty_pages or reader is None):
         try:
             import pytesseract  # type: ignore
             from pdf2image import convert_from_bytes  # type: ignore
@@ -191,6 +258,10 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
         else:
             try:
                 images = convert_from_bytes(data)
+                if reader is None:
+                    page_count = len(images)
+                    page_texts = ["" for _ in range(len(images))]
+                    empty_pages = list(range(len(images)))
                 for idx in empty_pages:
                     if idx < len(images):
                         ocr_text = pytesseract.image_to_string(images[idx])
@@ -218,7 +289,13 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
         )
 
     if not sections:
-        warnings.append("No text extracted from PDF.")
+        fallback_text, fallback_warnings = _extract_pdf_text_with_pdftotext(data)
+        warnings.extend(fallback_warnings)
+        cleaned_fallback = fallback_text.strip()
+        if cleaned_fallback:
+            sections.append(DocumentSection(text=cleaned_fallback))
+        else:
+            warnings.append("No text extracted from PDF.")
 
     return ExtractionResult(
         sections=sections,
