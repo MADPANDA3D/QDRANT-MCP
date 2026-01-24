@@ -56,6 +56,8 @@ OPTIONAL_FIELDS = {
     "page_end",
     "section_heading",
     "labels",
+    "related_ids",
+    "associations",
     "validation_errors",
     "validation_status",
     "merged_into",
@@ -76,6 +78,7 @@ FILTER_FIELDS = {
     "file_name",
     "file_type",
     "section_heading",
+    "related_ids",
     "created_at_from",
     "created_at_to",
     "updated_at_from",
@@ -113,6 +116,12 @@ class MemoryInput(BaseModel):
     labels: list[str] | None = Field(
         default=None, description="Optional labels for the memory."
     )
+    related_ids: list[str] | None = Field(
+        default=None, description="Related memory ids for association lookups."
+    )
+    associations: list[dict[str, Any]] | None = Field(
+        default=None, description="Optional association metadata."
+    )
     source: str | None = Field(default=None, description="Source of the memory.")
     created_at: Any | None = Field(default=None, description="Creation timestamp.")
     updated_at: Any | None = Field(default=None, description="Last update timestamp.")
@@ -135,6 +144,9 @@ class MemoryFilterInput(BaseModel):
     )
     labels: list[str] | str | None = Field(
         default=None, description="Filter by labels (any match)."
+    )
+    related_ids: list[str] | str | None = Field(
+        default=None, description="Filter by related memory ids (any match)."
     )
     scope: str | None = Field(default=None, description="Filter by scope.")
     source: str | None = Field(default=None, description="Filter by source.")
@@ -370,6 +382,27 @@ def normalize_memory_input(
             warnings.append("labels coerced to list.")
             labels_list = [_coerce_text(labels, "labels", strict, warnings)]
 
+    related_ids_list: list[str] | None = None
+    related_ids = raw.get("related_ids")
+    if related_ids is not None:
+        if isinstance(related_ids, str):
+            related_ids_list = [
+                item.strip() for item in related_ids.split(",") if item.strip()
+            ]
+            warnings.append("related_ids coerced to list.")
+        elif isinstance(related_ids, list):
+            related_ids_list = [
+                _coerce_text(item, "related_ids", strict, warnings)
+                for item in related_ids
+            ]
+        else:
+            if strict:
+                raise ValueError("related_ids must be a list or string.")
+            warnings.append("related_ids coerced to list.")
+            related_ids_list = [
+                _coerce_text(related_ids, "related_ids", strict, warnings)
+            ]
+
     source = raw.get("source")
     if source is None:
         if strict:
@@ -511,6 +544,9 @@ def normalize_memory_input(
     if labels_list is not None:
         base_metadata["labels"] = labels_list
 
+    if related_ids_list is not None:
+        base_metadata["related_ids"] = related_ids_list
+
     if ttl_days is not None:
         base_metadata["ttl_days"] = ttl_days
 
@@ -608,6 +644,24 @@ def build_memory_filter(
             )
         )
 
+    related_ids = raw.get("related_ids")
+    if related_ids is not None:
+        if isinstance(related_ids, str):
+            related_ids = [
+                item.strip() for item in related_ids.split(",") if item.strip()
+            ]
+        if not isinstance(related_ids, list):
+            if strict:
+                raise ValueError("related_ids filter must be a list or string.")
+            warnings.append("related_ids filter coerced to list.")
+            related_ids = [related_ids]
+        must.append(
+            models.FieldCondition(
+                key=f"{METADATA_PATH}.related_ids",
+                match=models.MatchAny(any=related_ids),
+            )
+        )
+
     def add_range(field: str, start: Any, end: Any):
         range_kwargs: dict[str, Any] = {}
         if start is not None:
@@ -670,6 +724,7 @@ def default_memory_indexes() -> dict[str, models.PayloadSchemaType]:
         f"{METADATA_PATH}.source": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.entities": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.labels": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.related_ids": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.doc_id": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.created_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.updated_at_ts": models.PayloadSchemaType.INTEGER,

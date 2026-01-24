@@ -90,6 +90,31 @@ def test_normalize_memory_labels_strict():
     assert warnings == []
 
 
+def test_normalize_memory_related_ids_strict():
+    embedding = EmbeddingInfo(provider="fastembed", model="model", dim=3, version="v1")
+    records, warnings = normalize_memory_input(
+        information="Remember this",
+        metadata={
+            "text": "Remember this",
+            "type": "note",
+            "entities": [],
+            "labels": ["housekeeping"],
+            "related_ids": ["mem-1", "mem-2"],
+            "source": "user",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "updated_at": "2024-01-01T00:00:00+00:00",
+            "scope": "global",
+            "confidence": 0.5,
+        },
+        memory=None,
+        embedding_info=embedding,
+        strict=True,
+        max_text_length=5000,
+    )
+    assert records[0].metadata["related_ids"] == ["mem-1", "mem-2"]
+    assert warnings == []
+
+
 def test_build_memory_filter_labels():
     warnings: list[str] = []
     filt = build_memory_filter(
@@ -100,6 +125,18 @@ def test_build_memory_filter_labels():
     assert warnings == []
     assert filt is not None
     assert filt.must[0].key.endswith(".labels")
+
+
+def test_build_memory_filter_related_ids():
+    warnings: list[str] = []
+    filt = build_memory_filter(
+        {"related_ids": ["alpha", "beta"]},
+        strict=False,
+        warnings=warnings,
+    )
+    assert warnings == []
+    assert filt is not None
+    assert filt.must[0].key.endswith(".related_ids")
 
 
 def test_backfill_patch_adds_missing_fields():

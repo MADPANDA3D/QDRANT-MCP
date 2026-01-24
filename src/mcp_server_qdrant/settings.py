@@ -252,3 +252,11 @@ class MemorySettings(BaseSettings):
         default="jarvis-quarantine",
         validation_alias="MCP_QUARANTINE_COLLECTION",
     )
+    short_term_collection: str = Field(
+        default="jarvis-short-term",
+        validation_alias="MCP_SHORT_TERM_COLLECTION",
+    )
+    short_term_ttl_days: int = Field(
+        default=7,
+        validation_alias="MCP_SHORT_TERM_TTL_DAYS",
+    )

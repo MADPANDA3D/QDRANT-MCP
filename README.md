@@ -111,13 +111,16 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 
 - `qdrant-store`: store a single memory point with metadata.
 - `qdrant-cache-memory`: store short-term memory with a TTL in a cache collection.
+- `qdrant-promote-short-term`: promote short-term memories into the long-term collection.
 - `qdrant-ingest-with-validation`: validate inputs, optionally quarantine, then store.
 - `qdrant-ingest-document`: chunk a document and store as multiple points.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
+- `qdrant-recommend-memories`: recommend memories using positive/negative examples.
 - `qdrant-update-point`: update payload fields for a point id.
 - `qdrant-patch-payload`: patch specific payload keys for a point id.
 - `qdrant-tag-memories`: append or replace labels for a set of points.
+- `qdrant-link-memories`: link memories via related ids and optional associations.
 - `qdrant-list-points`: scroll point ids in a collection with filters.
 - `qdrant-get-points`: fetch points by id list with payload/vectors.
 - `qdrant-count-points`: count points that match optional filters.
@@ -306,9 +309,9 @@ Qdrant instance network-restricted.
 Stored memories are normalized to include at least:
 `text`, `type`, `entities`, `source`, `created_at`, `updated_at`, `scope`, `confidence`, and `text_hash`.
 
-Optional fields include `expires_at` / `ttl_days`, `labels`, validation metadata
-(`validation_status`, `validation_errors`), merge markers (`merged_into`, `merged_from`),
-plus embedding metadata
+Optional fields include `expires_at` / `ttl_days`, `labels`, `related_ids`, `associations`,
+validation metadata (`validation_status`, `validation_errors`), merge markers
+(`merged_into`, `merged_from`), plus embedding metadata
 (`embedding_model`, `embedding_dim`, `embedding_provider`, `embedding_version`).
 
 Document ingestion stores additional fields such as `doc_id`, `doc_title`, `doc_hash`,

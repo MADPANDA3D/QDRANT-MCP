@@ -144,6 +144,8 @@ class TestMemorySettings:
         assert settings.health_check_collection is None
         assert settings.ingest_validation_mode == "allow"
         assert settings.quarantine_collection == "jarvis-quarantine"
+        assert settings.short_term_collection == "jarvis-short-term"
+        assert settings.short_term_ttl_days == 7
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("MCP_STRICT_PARAMS", "1")
@@ -152,6 +154,8 @@ class TestMemorySettings:
         monkeypatch.setenv("MCP_HEALTH_CHECK_COLLECTION", "jarvis-knowledge-base")
         monkeypatch.setenv("MCP_INGEST_VALIDATION_MODE", "quarantine")
         monkeypatch.setenv("MCP_QUARANTINE_COLLECTION", "jarvis-quarantine-dev")
+        monkeypatch.setenv("MCP_SHORT_TERM_COLLECTION", "jarvis-short-term-dev")
+        monkeypatch.setenv("MCP_SHORT_TERM_TTL_DAYS", "3")
         settings = MemorySettings()
         assert settings.strict_params is True
         assert settings.max_text_length == 2048
@@ -159,3 +163,5 @@ class TestMemorySettings:
         assert settings.health_check_collection == "jarvis-knowledge-base"
         assert settings.ingest_validation_mode == "quarantine"
         assert settings.quarantine_collection == "jarvis-quarantine-dev"
+        assert settings.short_term_collection == "jarvis-short-term-dev"
+        assert settings.short_term_ttl_days == 3

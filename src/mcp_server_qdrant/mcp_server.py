@@ -868,6 +868,18 @@ class QdrantMCPServer(FastMCP):
                 return 0.0
             return dot / (norm_a * norm_b)
 
+        def average_vectors(vectors: list[list[float]]) -> list[float]:
+            if not vectors:
+                raise ValueError("vectors cannot be empty.")
+            dimension = len(vectors[0])
+            sums = [0.0] * dimension
+            for vector in vectors:
+                if len(vector) != dimension:
+                    raise ValueError("vectors must share the same dimension.")
+                for index, value in enumerate(vector):
+                    sums[index] += float(value)
+            return [value / len(vectors) for value in sums]
+
         def mmr_select(
             query_vector: list[float],
             points: list[models.ScoredPoint],
@@ -1157,6 +1169,233 @@ class QdrantMCPServer(FastMCP):
                 dedupe_action=dedupe_action,
                 warnings=state.warnings,
             )
+            return finish_request(state, data)
+
+        async def cache_memory(
+            ctx: Context,
+            information: Annotated[
+                str, Field(description="Short-term memory text to store.")
+            ],
+            collection_name: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Optional short-term collection override. Defaults to "
+                        "MCP_SHORT_TERM_COLLECTION."
+                    )
+                ),
+            ] = None,
+            metadata: Annotated[
+                Metadata | None,
+                Field(description="Optional memory metadata overrides."),
+            ] = None,
+            ttl_days: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "TTL in days for short-term memory "
+                        "(defaults to MCP_SHORT_TERM_TTL_DAYS)."
+                    )
+                ),
+            ] = None,
+            dedupe_action: Annotated[
+                str | None,
+                Field(
+                    description="How to handle duplicates: update or skip. Defaults to MCP_DEDUPE_ACTION."
+                ),
+            ] = None,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "information": information,
+                    "collection_name": collection_name,
+                    "metadata": metadata,
+                    "ttl_days": ttl_days,
+                    "dedupe_action": dedupe_action,
+                },
+            )
+            ensure_mutations_allowed()
+
+            resolved_collection = (
+                collection_name or self.memory_settings.short_term_collection
+            )
+            if not resolved_collection:
+                raise ValueError("Short-term collection is not configured.")
+
+            resolved_ttl = ttl_days
+            if resolved_ttl is None and metadata and "ttl_days" in metadata:
+                raw_ttl = metadata.get("ttl_days")
+                if isinstance(raw_ttl, int):
+                    resolved_ttl = raw_ttl
+                else:
+                    coerced = coerce_int(raw_ttl)
+                    if coerced is not None:
+                        state.warnings.append("ttl_days coerced to int.")
+                        resolved_ttl = coerced
+                    else:
+                        state.warnings.append("ttl_days ignored due to invalid value.")
+            if resolved_ttl is None:
+                resolved_ttl = self.memory_settings.short_term_ttl_days
+            if resolved_ttl <= 0:
+                raise ValueError("ttl_days must be a positive integer.")
+
+            cache_metadata = dict(metadata or {})
+            cache_metadata["ttl_days"] = resolved_ttl
+            cache_metadata.setdefault("scope", "short_term")
+            cache_metadata.setdefault("source", "short_term_cache")
+
+            data = await perform_store(
+                information=information,
+                collection_name=resolved_collection,
+                metadata=cache_metadata,
+                dedupe_action=dedupe_action,
+                warnings=state.warnings,
+            )
+            data["collection_name"] = resolved_collection
+            data["ttl_days"] = resolved_ttl
+            return finish_request(state, data)
+
+        async def promote_short_term(
+            ctx: Context,
+            point_ids: Annotated[
+                list[str],
+                Field(description="Point ids to promote from short-term memory."),
+            ],
+            source_collection: Annotated[
+                str | None,
+                Field(
+                    description="Optional short-term collection override (defaults to MCP_SHORT_TERM_COLLECTION)."
+                ),
+            ] = None,
+            target_collection: Annotated[
+                str | None,
+                Field(
+                    description="Target collection for long-term storage (defaults to server collection)."
+                ),
+            ] = None,
+            metadata_patch: Annotated[
+                Metadata | None,
+                Field(description="Optional metadata overrides to apply on promote."),
+            ] = None,
+            clear_ttl: Annotated[
+                bool,
+                Field(
+                    description="Clear expires_at/ttl_days fields when promoting to long-term."
+                ),
+            ] = True,
+            remove_source: Annotated[
+                bool,
+                Field(description="Delete promoted points from short-term collection."),
+            ] = False,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "point_ids": point_ids,
+                    "source_collection": source_collection,
+                    "target_collection": target_collection,
+                    "metadata_patch": metadata_patch,
+                    "clear_ttl": clear_ttl,
+                    "remove_source": remove_source,
+                },
+            )
+            ensure_mutations_allowed()
+            if not point_ids:
+                raise ValueError("point_ids cannot be empty.")
+            enforce_point_ids(point_ids)
+
+            source = source_collection or self.memory_settings.short_term_collection
+            if not source:
+                raise ValueError("Short-term collection is not configured.")
+            target = resolve_collection_name(target_collection or "")
+
+            records = await self.qdrant_connector.retrieve_points(
+                point_ids,
+                collection_name=source,
+                with_payload=True,
+                with_vectors=True,
+            )
+            found_ids = {str(record.id) for record in records}
+            missing_ids = [pid for pid in point_ids if pid not in found_ids]
+
+            await self.qdrant_connector.ensure_collection_exists(target)
+            source_vector_name = await self.qdrant_connector.resolve_vector_name(source)
+            target_vector_name = await self.qdrant_connector.resolve_vector_name(target)
+
+            now = datetime.now(timezone.utc)
+            promoted_ids: list[str] = []
+            reembedded_ids: list[str] = []
+            skipped_ids: list[str] = []
+            points_to_upsert: list[models.PointStruct] = []
+            patch = dict(metadata_patch or {})
+
+            for record in records:
+                record_id = str(record.id)
+                payload = dict(record.payload or {})
+                metadata = dict(payload.get(METADATA_PATH) or {})
+                if clear_ttl:
+                    metadata.pop("ttl_days", None)
+                    metadata.pop("expires_at", None)
+                    metadata.pop("expires_at_ts", None)
+                if patch:
+                    metadata.update(patch)
+                metadata["updated_at"] = now.isoformat()
+                metadata["updated_at_ts"] = int(now.timestamp() * 1000)
+                payload[METADATA_PATH] = metadata
+
+                vector = extract_vector(record.vector, source_vector_name)
+                if vector is None:
+                    text = extract_payload_text(payload)
+                    if not text:
+                        skipped_ids.append(record_id)
+                        state.warnings.append(
+                            f"Missing text/vector for {record_id}; skipped."
+                        )
+                        continue
+                    entry = Entry(content=text, metadata=metadata)
+                    await self.qdrant_connector.store(
+                        entry, collection_name=target, point_id=record_id
+                    )
+                    reembedded_ids.append(record_id)
+                    continue
+
+                if target_vector_name is None:
+                    vector_payload: list[float] | dict[str, list[float]] = vector
+                else:
+                    vector_payload = {target_vector_name: vector}
+
+                points_to_upsert.append(
+                    models.PointStruct(
+                        id=record_id,
+                        vector=vector_payload,
+                        payload=payload,
+                    )
+                )
+                promoted_ids.append(record_id)
+
+            if points_to_upsert:
+                await self.qdrant_connector.upsert_points(
+                    points_to_upsert,
+                    collection_name=target,
+                )
+
+            if remove_source and (promoted_ids or reembedded_ids):
+                await self.qdrant_connector.delete_points(
+                    [*promoted_ids, *reembedded_ids],
+                    collection_name=source,
+                )
+
+            data = {
+                "status": "promoted",
+                "source_collection": source,
+                "target_collection": target,
+                "promoted": promoted_ids,
+                "reembedded": reembedded_ids,
+                "skipped": skipped_ids,
+                "missing": missing_ids,
+                "removed_from_source": remove_source,
+            }
             return finish_request(state, data)
 
         async def validate_memory(
@@ -1831,6 +2070,165 @@ class QdrantMCPServer(FastMCP):
                 "filter_applied": filter_applied,
                 "query_vector_dim": query_vector_dim,
                 "mmr": use_mmr,
+            }
+            return finish_request(state, data, extra_meta=extra_meta)
+
+        async def recommend_memories(
+            ctx: Context,
+            positive_ids: Annotated[
+                list[str], Field(description="Point ids to treat as positive examples.")
+            ],
+            collection_name: Annotated[
+                str, Field(description="The collection to search in")
+            ],
+            negative_ids: Annotated[
+                list[str] | None,
+                Field(description="Optional point ids to treat as negatives."),
+            ] = None,
+            memory_filter: Annotated[
+                MemoryFilterInput | None,
+                Field(description="Structured filters for memory fields."),
+            ] = None,
+            query_filter: ArbitraryFilter | None = None,
+            top_k: Annotated[
+                int | None, Field(description="Max number of results to return.")
+            ] = None,
+            negative_weight: Annotated[
+                float,
+                Field(description="Weight for negative vectors in the blend."),
+            ] = 1.0,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "positive_ids": positive_ids,
+                    "negative_ids": negative_ids,
+                    "collection_name": collection_name,
+                    "memory_filter": memory_filter,
+                    "query_filter": query_filter,
+                    "top_k": top_k,
+                    "negative_weight": negative_weight,
+                },
+            )
+
+            if not positive_ids:
+                raise ValueError("positive_ids cannot be empty.")
+            enforce_point_ids(positive_ids, name="positive_ids")
+            if negative_ids is not None:
+                if not negative_ids:
+                    raise ValueError("negative_ids cannot be empty.")
+                enforce_point_ids(negative_ids, name="negative_ids")
+            if negative_weight < 0:
+                raise ValueError("negative_weight must be >= 0.")
+
+            positive_set = {str(pid) for pid in positive_ids}
+            negative_set = {str(pid) for pid in (negative_ids or [])}
+            overlap = positive_set & negative_set
+            if overlap:
+                state.warnings.append(
+                    "positive_ids and negative_ids overlap; removing from negatives."
+                )
+                negative_set -= overlap
+
+            memory_filter_obj = build_memory_filter(
+                memory_filter,
+                strict=self.memory_settings.strict_params,
+                warnings=state.warnings,
+            )
+
+            query_filter_obj = None
+            if query_filter:
+                if not self.qdrant_settings.allow_arbitrary_filter:
+                    if self.memory_settings.strict_params:
+                        raise ValueError("query_filter is not allowed.")
+                    state.warnings.append("query_filter ignored (not allowed).")
+                else:
+                    query_filter_obj = models.Filter(**query_filter)
+
+            combined_filter = merge_filters([memory_filter_obj, query_filter_obj])
+
+            limit = top_k or self.qdrant_settings.search_limit
+            if limit <= 0:
+                raise ValueError("top_k must be positive.")
+
+            collection = resolve_collection_name(collection_name)
+            vector_name = await self.qdrant_connector.resolve_vector_name(collection)
+            requested_ids = [*positive_set, *negative_set]
+            records = await self.qdrant_connector.retrieve_points(
+                requested_ids,
+                collection_name=collection,
+                with_payload=False,
+                with_vectors=True,
+            )
+            found_ids = {str(record.id) for record in records}
+            missing_ids = [pid for pid in requested_ids if pid not in found_ids]
+
+            positive_vectors: list[list[float]] = []
+            negative_vectors: list[list[float]] = []
+            for record in records:
+                record_id = str(record.id)
+                vector = extract_vector(record.vector, vector_name)
+                if vector is None:
+                    state.warnings.append(
+                        f"Missing vector for {record_id}; skipped in blend."
+                    )
+                    continue
+                if record_id in positive_set:
+                    positive_vectors.append(vector)
+                elif record_id in negative_set:
+                    negative_vectors.append(vector)
+
+            if not positive_vectors:
+                raise ValueError("No vectors found for positive_ids.")
+            if negative_set and not negative_vectors:
+                state.warnings.append("No vectors found for negative_ids.")
+
+            query_vector = average_vectors(positive_vectors)
+            if negative_vectors and negative_weight > 0:
+                negative_vector = average_vectors(negative_vectors)
+                query_vector = [
+                    pos - (negative_weight * neg)
+                    for pos, neg in zip(query_vector, negative_vector)
+                ]
+
+            exclude_ids = positive_set | negative_set
+            fetch_limit = min(limit + len(exclude_ids), limit * 2 + 50)
+            points = await self.qdrant_connector.query_points(
+                query_vector,
+                collection_name=collection,
+                limit=fetch_limit,
+                query_filter=combined_filter,
+                with_vectors=False,
+            )
+
+            results = []
+            for point in points:
+                point_id = str(point.id)
+                if point_id in exclude_ids:
+                    continue
+                payload = point.payload or {}
+                text = extract_payload_text(payload)
+                results.append(
+                    {
+                        "id": point_id,
+                        "score": point.score,
+                        "payload": payload,
+                        "snippet": make_snippet(text),
+                    }
+                )
+                if len(results) >= limit:
+                    break
+
+            data = {
+                "collection_name": collection,
+                "results": results,
+                "missing": missing_ids,
+                "excluded": sorted(exclude_ids),
+            }
+            extra_meta = {
+                "top_k": limit,
+                "filter_applied": combined_filter is not None,
+                "query_vector_dim": len(query_vector),
             }
             return finish_request(state, data, extra_meta=extra_meta)
 
@@ -2597,6 +2995,224 @@ class QdrantMCPServer(FastMCP):
                 "status": "patched",
                 "id": point_id,
                 "collection_name": collection,
+            }
+            return finish_request(state, data)
+
+        async def tag_memories(
+            ctx: Context,
+            point_ids: Annotated[
+                list[str], Field(description="Point ids to tag with labels.")
+            ],
+            labels: Annotated[
+                list[str], Field(description="Labels to add to the points.")
+            ],
+            collection_name: Annotated[
+                str, Field(description="The collection containing the points.")
+            ],
+            replace: Annotated[
+                bool,
+                Field(
+                    description="Replace existing labels instead of merging.",
+                ),
+            ] = False,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "point_ids": point_ids,
+                    "labels": labels,
+                    "collection_name": collection_name,
+                    "replace": replace,
+                },
+            )
+            ensure_mutations_allowed()
+            if not point_ids:
+                raise ValueError("point_ids cannot be empty.")
+            enforce_point_ids(point_ids)
+
+            normalized_labels = [
+                str(label).strip() for label in labels if str(label).strip()
+            ]
+            if not normalized_labels:
+                raise ValueError("labels cannot be empty.")
+
+            collection = resolve_collection_name(collection_name)
+            records = await self.qdrant_connector.retrieve_points(
+                point_ids, collection_name=collection
+            )
+            found_ids = {str(record.id) for record in records}
+            missing_ids = [pid for pid in point_ids if pid not in found_ids]
+
+            updated_ids: list[str] = []
+            now = datetime.now(timezone.utc)
+            for record in records:
+                existing_payload = record.payload or {}
+                existing_metadata = dict(existing_payload.get(METADATA_PATH) or {})
+                existing_labels = existing_metadata.get("labels")
+
+                if replace:
+                    merged_labels = normalized_labels
+                else:
+                    if isinstance(existing_labels, list):
+                        merged_labels = merge_list_values(
+                            existing_labels, normalized_labels
+                        )
+                    elif existing_labels:
+                        merged_labels = merge_list_values(
+                            [str(existing_labels)], normalized_labels
+                        )
+                    else:
+                        merged_labels = list(normalized_labels)
+
+                existing_metadata["labels"] = merged_labels
+                existing_metadata["updated_at"] = now.isoformat()
+                existing_metadata["updated_at_ts"] = int(now.timestamp() * 1000)
+                new_payload = dict(existing_payload)
+                new_payload[METADATA_PATH] = existing_metadata
+
+                await self.qdrant_connector.overwrite_payload(
+                    [str(record.id)],
+                    new_payload,
+                    collection_name=collection,
+                )
+                updated_ids.append(str(record.id))
+
+            data = {
+                "status": "tagged",
+                "collection_name": collection,
+                "updated": updated_ids,
+                "missing": missing_ids,
+                "labels": normalized_labels,
+                "replace": replace,
+            }
+            return finish_request(state, data)
+
+        async def link_memories(
+            ctx: Context,
+            source_id: Annotated[
+                str, Field(description="Source point id to link from.")
+            ],
+            target_ids: Annotated[
+                list[str], Field(description="Target point ids to link to.")
+            ],
+            collection_name: Annotated[
+                str, Field(description="The collection containing the points.")
+            ],
+            relation: Annotated[
+                str | None,
+                Field(description="Optional relation label for the association."),
+            ] = None,
+            bidirectional: Annotated[
+                bool,
+                Field(description="Apply links in both directions."),
+            ] = True,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "source_id": source_id,
+                    "target_ids": target_ids,
+                    "collection_name": collection_name,
+                    "relation": relation,
+                    "bidirectional": bidirectional,
+                },
+            )
+            ensure_mutations_allowed()
+            if not source_id:
+                raise ValueError("source_id is required.")
+            if not target_ids:
+                raise ValueError("target_ids cannot be empty.")
+            enforce_point_ids([source_id], name="source_id")
+            enforce_point_ids(target_ids, name="target_ids")
+
+            normalized_targets = [str(pid) for pid in target_ids if str(pid).strip()]
+            if source_id in normalized_targets:
+                normalized_targets = [
+                    pid for pid in normalized_targets if pid != source_id
+                ]
+                state.warnings.append("source_id removed from target_ids.")
+            if not normalized_targets:
+                raise ValueError("target_ids cannot be empty after normalization.")
+
+            collection = resolve_collection_name(collection_name)
+            ids_to_fetch = [source_id, *normalized_targets]
+            records = await self.qdrant_connector.retrieve_points(
+                ids_to_fetch,
+                collection_name=collection,
+                with_payload=True,
+                with_vectors=False,
+            )
+            record_map = {str(record.id): record for record in records}
+            missing_ids = [pid for pid in ids_to_fetch if pid not in record_map]
+            if source_id not in record_map:
+                raise ValueError(f"Source point {source_id} not found.")
+
+            updated_ids: list[str] = []
+            now = datetime.now(timezone.utc)
+
+            def build_related(existing: Any, additions: list[str]) -> list[str]:
+                if isinstance(existing, list):
+                    base = [str(item).strip() for item in existing if str(item).strip()]
+                elif existing:
+                    base = [str(existing).strip()]
+                else:
+                    base = []
+                return merge_list_values(base, additions)
+
+            def build_associations(
+                existing: Any, additions: list[dict[str, Any]]
+            ) -> list[Any]:
+                if isinstance(existing, list):
+                    base = list(existing)
+                elif existing:
+                    base = [existing]
+                else:
+                    base = []
+                return merge_list_values(base, additions)
+
+            update_targets = [pid for pid in normalized_targets if pid in record_map]
+            updates: dict[str, list[str]] = {source_id: update_targets}
+            if bidirectional:
+                for target_id in update_targets:
+                    updates[target_id] = [source_id]
+
+            for record_id, add_ids in updates.items():
+                record = record_map[record_id]
+                payload = dict(record.payload or {})
+                metadata = dict(payload.get(METADATA_PATH) or {})
+                metadata["related_ids"] = build_related(
+                    metadata.get("related_ids"), add_ids
+                )
+
+                if relation:
+                    assoc_items = [
+                        {"id": target_id, "relation": relation}
+                        for target_id in add_ids
+                    ]
+                    metadata["associations"] = build_associations(
+                        metadata.get("associations"), assoc_items
+                    )
+
+                metadata["updated_at"] = now.isoformat()
+                metadata["updated_at_ts"] = int(now.timestamp() * 1000)
+                payload[METADATA_PATH] = metadata
+
+                await self.qdrant_connector.overwrite_payload(
+                    [record_id],
+                    payload,
+                    collection_name=collection,
+                )
+                updated_ids.append(record_id)
+
+            data = {
+                "status": "linked",
+                "collection_name": collection,
+                "source_id": source_id,
+                "targets": update_targets,
+                "updated": updated_ids,
+                "missing": missing_ids,
+                "relation": relation,
+                "bidirectional": bidirectional,
             }
             return finish_request(state, data)
 
@@ -4965,9 +5581,14 @@ class QdrantMCPServer(FastMCP):
             return finish_request(state, data)
 
         find_foo = find
+        recommend_memories_foo = recommend_memories
         store_foo = store
+        cache_memory_foo = cache_memory
+        promote_short_term_foo = promote_short_term
         update_foo = update_point
         patch_foo = patch_payload
+        tag_memories_foo = tag_memories
+        link_memories_foo = link_memories
         list_points_foo = list_points
         get_points_foo = get_points
         count_points_foo = count_points
@@ -4989,8 +5610,28 @@ class QdrantMCPServer(FastMCP):
 
         if len(filterable_conditions) > 0:
             find_foo = wrap_filters(find_foo, filterable_conditions)
+            recommend_memories_foo = wrap_filters(
+                recommend_memories_foo, filterable_conditions
+            )
         elif not self.qdrant_settings.allow_arbitrary_filter:
             find_foo = make_partial_function(find_foo, {"query_filter": None})
+            recommend_memories_foo = make_partial_function(
+                recommend_memories_foo, {"query_filter": None}
+            )
+
+        short_term_find_foo = None
+        if self.memory_settings.short_term_collection:
+            short_term_find_foo = make_partial_function(
+                find_foo,
+                {"collection_name": self.memory_settings.short_term_collection},
+            )
+
+        short_term_expire_foo = None
+        if self.memory_settings.short_term_collection:
+            short_term_expire_foo = make_partial_function(
+                expire_memories_foo,
+                {"collection_name": self.memory_settings.short_term_collection},
+            )
 
         if (
             self.qdrant_settings.collection_name
@@ -4998,6 +5639,10 @@ class QdrantMCPServer(FastMCP):
         ):
             find_foo = make_partial_function(
                 find_foo, {"collection_name": self.qdrant_settings.collection_name}
+            )
+            recommend_memories_foo = make_partial_function(
+                recommend_memories_foo,
+                {"collection_name": self.qdrant_settings.collection_name},
             )
             store_foo = make_partial_function(
                 store_foo, {"collection_name": self.qdrant_settings.collection_name}
@@ -5007,6 +5652,14 @@ class QdrantMCPServer(FastMCP):
             )
             patch_foo = make_partial_function(
                 patch_foo, {"collection_name": self.qdrant_settings.collection_name}
+            )
+            tag_memories_foo = make_partial_function(
+                tag_memories_foo,
+                {"collection_name": self.qdrant_settings.collection_name},
+            )
+            link_memories_foo = make_partial_function(
+                link_memories_foo,
+                {"collection_name": self.qdrant_settings.collection_name},
             )
             list_points_foo = make_partial_function(
                 list_points_foo,
@@ -5071,6 +5724,17 @@ class QdrantMCPServer(FastMCP):
             find_foo,
             name="qdrant-find",
             description=self.tool_settings.tool_find_description,
+        )
+        if short_term_find_foo is not None:
+            self.tool(
+                short_term_find_foo,
+                name="qdrant-find-short-term",
+                description="Search the short-term memory cache collection.",
+            )
+        self.tool(
+            recommend_memories_foo,
+            name="qdrant-recommend-memories",
+            description="Recommend memories using positive/negative example ids.",
         )
         self.tool(
             validate_memory_foo,
@@ -5226,6 +5890,16 @@ class QdrantMCPServer(FastMCP):
                 description=self.tool_settings.tool_store_description,
             )
             self.tool(
+                cache_memory_foo,
+                name="qdrant-cache-memory",
+                description="Store short-term memory with a TTL in a cache collection.",
+            )
+            self.tool(
+                promote_short_term_foo,
+                name="qdrant-promote-short-term",
+                description="Promote short-term memories into the long-term collection.",
+            )
+            self.tool(
                 ingest_with_validation_foo,
                 name="qdrant-ingest-with-validation",
                 description="Store memory with contract validation and quarantine support.",
@@ -5258,6 +5932,16 @@ class QdrantMCPServer(FastMCP):
                 description="Patch payload metadata for a point.",
             )
             self.tool(
+                tag_memories_foo,
+                name="qdrant-tag-memories",
+                description="Append or replace labels for a set of points.",
+            )
+            self.tool(
+                link_memories_foo,
+                name="qdrant-link-memories",
+                description="Link memories via related_ids and optional associations.",
+            )
+            self.tool(
                 reembed_points_foo,
                 name="qdrant-reembed-points",
                 description="Re-embed points when embedding version changes.",
@@ -5282,6 +5966,12 @@ class QdrantMCPServer(FastMCP):
                 name="qdrant-expire-memories",
                 description="Expire memories by expires_at_ts (optional archive).",
             )
+            if short_term_expire_foo is not None:
+                self.tool(
+                    short_term_expire_foo,
+                    name="qdrant-expire-short-term",
+                    description="Expire short-term memories by expires_at_ts.",
+                )
             if self.tool_settings.admin_tools_enabled:
                 self.tool(
                     update_optimizer_config,
