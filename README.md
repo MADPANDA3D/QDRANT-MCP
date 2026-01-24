@@ -110,11 +110,14 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 <summary>Core Memory Tools</summary>
 
 - `qdrant-store`: store a single memory point with metadata.
+- `qdrant-cache-memory`: store short-term memory with a TTL in a cache collection.
 - `qdrant-ingest-with-validation`: validate inputs, optionally quarantine, then store.
 - `qdrant-ingest-document`: chunk a document and store as multiple points.
 - `qdrant-find`: query vectors with filters and return matches.
+- `qdrant-find-short-term`: query the short-term memory cache collection.
 - `qdrant-update-point`: update payload fields for a point id.
 - `qdrant-patch-payload`: patch specific payload keys for a point id.
+- `qdrant-tag-memories`: append or replace labels for a set of points.
 - `qdrant-list-points`: scroll point ids in a collection with filters.
 - `qdrant-get-points`: fetch points by id list with payload/vectors.
 - `qdrant-count-points`: count points that match optional filters.
@@ -132,6 +135,7 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 - `qdrant-merge-duplicates`: merge duplicate groups into a canonical point.
 - `qdrant-reembed-points`: recompute embeddings for selected points.
 - `qdrant-expire-memories`: delete/archive memories past `expires_at_ts`.
+- `qdrant-expire-short-term`: delete expired memories from the short-term cache.
 - `qdrant-delete-points`: delete points by id list.
 - `qdrant-delete-by-filter`: delete points that match a filter.
 - `qdrant-delete-document`: delete all chunks for a document id.
@@ -208,6 +212,8 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_INGEST_VALIDATION_MODE`  | Validation mode (`allow`, `reject`, `quarantine`)                   | `allow`                                                           |
 | `MCP_QUARANTINE_COLLECTION`   | Collection name for quarantined memories                            | `jarvis-quarantine`                                               |
 | `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                                 | unset                                                             |
+| `MCP_SHORT_TERM_COLLECTION`   | Collection name for short-term memory cache                          | `jarvis-short-term`                                               |
+| `MCP_SHORT_TERM_TTL_DAYS`     | Default TTL (days) for short-term memory cache                       | `7`                                                               |
 | `MCP_SERVER_VERSION`          | Optional git SHA for telemetry                                      | unset                                                             |
 | `MCP_ALLOW_REQUEST_OVERRIDES` | Allow per-request Qdrant headers                                    | `false`                                                           |
 | `MCP_REQUIRE_REQUEST_QDRANT_URL` | Require `X-Qdrant-Url` when overrides enabled                    | `true`                                                            |
