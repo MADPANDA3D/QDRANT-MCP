@@ -3186,8 +3186,7 @@ class QdrantMCPServer(FastMCP):
 
                 if relation:
                     assoc_items = [
-                        {"id": target_id, "relation": relation}
-                        for target_id in add_ids
+                        {"id": target_id, "relation": relation} for target_id in add_ids
                     ]
                     metadata["associations"] = build_associations(
                         metadata.get("associations"), assoc_items

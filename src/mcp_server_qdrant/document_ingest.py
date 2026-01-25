@@ -181,7 +181,7 @@ def _extract_pdf_text_with_pdftotext(data: bytes) -> tuple[str, list[str]]:
             stderr=subprocess.PIPE,
             check=False,
         )
-    except FileNotFoundError as exc:  # pragma: no cover - binary missing
+    except FileNotFoundError:  # pragma: no cover - binary missing
         warnings.append("pdftotext is required for PDF fallback extraction.")
         return "", warnings
     finally:
@@ -241,9 +241,7 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
             try:
                 text = page.extract_text() or ""
             except Exception as exc:  # pragma: no cover - PDF parsing errors vary
-                warnings.append(
-                    f"PDF text extraction failed for page {idx + 1}: {exc}"
-                )
+                warnings.append(f"PDF text extraction failed for page {idx + 1}: {exc}")
                 text = ""
             if not text.strip():
                 empty_pages.append(idx)
