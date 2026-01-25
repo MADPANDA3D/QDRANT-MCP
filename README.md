@@ -92,6 +92,28 @@ docker run -d --name mcp-qdrant \
 </details>
 
 <details>
+<summary>Auto-update with Watchtower (GHCR)</summary>
+
+```bash
+# Run from GHCR (make the package public or login to GHCR first).
+docker run -d --name mcp-qdrant \
+  --network npm_default \
+  --env-file .env \
+  --label com.centurylinklabs.watchtower.enable=true \
+  ghcr.io/<owner>/mad-mcp-qdrant:latest \
+  mcp-server-qdrant --transport streamable-http
+
+# Watchtower will pull new release images and restart the container.
+docker run -d --name watchtower \
+  --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower \
+  --cleanup --interval 1800 --label-enable
+```
+
+</details>
+
+<details>
 <summary>Run locally (uvx)</summary>
 
 ```bash

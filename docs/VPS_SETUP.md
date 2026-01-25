@@ -55,6 +55,27 @@ docker exec -it npm_app_1 curl -i http://mcp-qdrant:8000/mcp/
 ```
 Expected: 406 Not Acceptable unless you send `Accept: text/event-stream`.
 
+3b) Optional auto-update with Watchtower (GHCR)
+-----------------------------------------------
+If you prefer auto-updates on each release, run the GHCR image instead of a local
+build. Make sure the GHCR package is public (or login to GHCR first).
+
+```bash
+docker rm -f mcp-qdrant 2>/dev/null
+docker run -d --name mcp-qdrant \
+  --network npm_default \
+  --env-file .env \
+  --label com.centurylinklabs.watchtower.enable=true \
+  ghcr.io/<owner>/mad-mcp-qdrant:latest \
+  mcp-server-qdrant --transport streamable-http
+
+docker run -d --name watchtower \
+  --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower \
+  --cleanup --interval 1800 --label-enable
+```
+
 4) Nginx Proxy Manager settings
 -------------------------------
 Create a Proxy Host:
