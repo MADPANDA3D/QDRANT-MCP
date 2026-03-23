@@ -72,6 +72,9 @@ class RequestQdrantOverrides:
     api_key: str | None
     collection_name: str | None
     vector_name: str | None
+    embedding_provider: EmbeddingProvider | None = None
+    embedding_provider_settings: EmbeddingProviderSettings | None = None
+    embedding_info: EmbeddingInfo | None = None
 
 
 # FastMCP is an alternative interface for declaring the capabilities
@@ -99,6 +102,14 @@ class QdrantMCPServer(FastMCP):
             request_override_settings or RequestOverrideSettings()
         )
         self.memory_settings = memory_settings or MemorySettings()
+        self._embedding_provider_var: ContextVar[EmbeddingProvider | None] = ContextVar(
+            "embedding_provider",
+            default=None,
+        )
+        self._embedding_info_var: ContextVar[EmbeddingInfo | None] = ContextVar(
+            "embedding_info",
+            default=None,
+        )
 
         if embedding_provider_settings and embedding_provider:
             raise ValueError(
@@ -158,6 +169,28 @@ class QdrantMCPServer(FastMCP):
     def qdrant_connector(self) -> QdrantConnector:
         connector = self._connector_var.get()
         return connector or self._default_qdrant_connector
+
+    @property
+    def embedding_provider(self) -> EmbeddingProvider:
+        provider = self._embedding_provider_var.get()
+        if provider is not None:
+            return provider
+        return self._default_embedding_provider
+
+    @embedding_provider.setter
+    def embedding_provider(self, value: EmbeddingProvider) -> None:
+        self._default_embedding_provider = value
+
+    @property
+    def embedding_info(self) -> EmbeddingInfo:
+        info = self._embedding_info_var.get()
+        if info is not None:
+            return info
+        return self._default_embedding_info
+
+    @embedding_info.setter
+    def embedding_info(self, value: EmbeddingInfo) -> None:
+        self._default_embedding_info = value
 
     def _normalize_headers(self, headers: Mapping[str, Any] | None) -> dict[str, str]:
         if not headers:
@@ -306,24 +339,31 @@ class QdrantMCPServer(FastMCP):
         entry_metadata = json.dumps(entry.metadata) if entry.metadata else ""
         return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata></entry>"
 
-    def _resolve_embedding_info(self) -> EmbeddingInfo:
+    def _resolve_embedding_info(
+        self,
+        provider: EmbeddingProvider | None = None,
+        settings: EmbeddingProviderSettings | None = None,
+    ) -> EmbeddingInfo:
         model_name = "unknown"
         provider_name = "unknown"
         version = "unknown"
 
-        if self.embedding_provider_settings:
-            provider_name = self.embedding_provider_settings.provider_type.value
-            model_name = self.embedding_provider_settings.model_name
-            version = self.embedding_provider_settings.version or model_name
+        provider_obj = provider or self.embedding_provider
+        settings_obj = settings if settings is not None else self.embedding_provider_settings
+
+        if settings_obj:
+            provider_name = settings_obj.provider_type.value
+            model_name = settings_obj.model_name
+            version = settings_obj.version or model_name
         else:
             provider_name = (
-                getattr(self.embedding_provider, "provider_type", None)
-                or self.embedding_provider.__class__.__name__.lower()
+                getattr(provider_obj, "provider_type", None)
+                or provider_obj.__class__.__name__.lower()
             )
-            model_name = getattr(self.embedding_provider, "model_name", "unknown")
-            version = getattr(self.embedding_provider, "version", None) or model_name
+            model_name = getattr(provider_obj, "model_name", "unknown")
+            version = getattr(provider_obj, "version", None) or model_name
 
-        dim = self.embedding_provider.get_vector_size()
+        dim = provider_obj.get_vector_size()
         return EmbeddingInfo(
             provider=provider_name,
             model=model_name,
@@ -927,6 +967,9 @@ class QdrantMCPServer(FastMCP):
             mime_map = {
                 "text/plain": "txt",
                 "text/markdown": "md",
+                "text/csv": "csv",
+                "application/csv": "csv",
+                "application/vnd.ms-excel": "csv",
                 "application/pdf": "pdf",
                 "application/msword": "doc",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -958,9 +1001,9 @@ class QdrantMCPServer(FastMCP):
             if candidate in {"text"}:
                 candidate = "txt"
 
-            allowed = {"txt", "md", "pdf", "doc", "docx"}
+            allowed = {"txt", "md", "csv", "pdf", "doc", "docx"}
             if candidate not in allowed:
-                raise ValueError("file_type must be one of: txt, md, pdf, doc, docx.")
+                raise ValueError("file_type must be one of: txt, md, csv, pdf, doc, docx.")
             return candidate
 
         def parse_base64_payload(value: str) -> bytes:
@@ -1534,7 +1577,7 @@ class QdrantMCPServer(FastMCP):
             ] = None,
             file_type: Annotated[
                 str | None,
-                Field(description="File type/extension: txt, md, pdf, doc, docx."),
+                Field(description="File type/extension: txt, md, csv, pdf, doc, docx."),
             ] = None,
             mime_type: Annotated[
                 str | None,
@@ -1590,8 +1633,8 @@ class QdrantMCPServer(FastMCP):
             ] = None,
             ocr: Annotated[
                 bool,
-                Field(description="Enable OCR for PDF pages without text."),
-            ] = False,
+                Field(description="Enable OCR for PDF extraction (default: true)."),
+            ] = True,
             dedupe_action: Annotated[
                 str | None,
                 Field(
@@ -1697,11 +1740,11 @@ class QdrantMCPServer(FastMCP):
                 raise ValueError(f"{resolved_file_type} ingestion requires file bytes.")
 
             if (
-                resolved_file_type in {"txt", "md"}
+                resolved_file_type in {"txt", "md", "csv"}
                 and text is None
                 and file_bytes is None
             ):
-                raise ValueError("txt/md ingestion requires text or file bytes.")
+                raise ValueError("txt/md/csv ingestion requires text or file bytes.")
 
             extraction_result = await asyncio.to_thread(
                 extract_document_sections,
@@ -1951,8 +1994,8 @@ class QdrantMCPServer(FastMCP):
             ctx: Context,
             query: Annotated[str, Field(description="What to search for")],
             collection_name: Annotated[
-                str, Field(description="The collection to search in")
-            ],
+                str | None, Field(description="The collection to search in")
+            ] = None,
             memory_filter: Annotated[
                 MemoryFilterInput | None,
                 Field(description="Structured filters for memory fields."),
@@ -5907,7 +5950,7 @@ class QdrantMCPServer(FastMCP):
                 ingest_document,
                 name="qdrant-ingest-document",
                 description=(
-                    "Ingest documents (txt, md, pdf, doc, docx) by extracting text and storing chunks."
+                    "Ingest documents (txt, md, csv, pdf, doc, docx) by extracting text and storing chunks."
                 ),
             )
             self.tool(

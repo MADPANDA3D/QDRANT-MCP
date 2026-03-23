@@ -37,6 +37,8 @@ Use the MADPANDA3D hosted endpoint:
 https://qdrant-mcp.madpanda3d.com/mcp
 ```
 
+Note: `https://qdrant-mcp.madpanda3d.com/mcp/` is deprecated and returns `410 Gone` with a migration message.
+
 n8n setup:
 
 1. Add **MCP tool node** to your agent.
@@ -45,8 +47,11 @@ n8n setup:
 4. Set **Auth** to **Multiple Headers Auth**.
 5. Add headers:
    - `X-Qdrant-Url`
-   - `X-Collection-Name`
-   - `X-Qdrant-Api-Key` (required for private Qdrant)
+   - `X-Qdrant-Api-Key`
+   - `X-Collection-Name` (optional)
+   - `X-Embedding-Provider` (optional; required for semantic search + write tools)
+   - `X-Embedding-Model` (optional; required with `X-Embedding-Provider`)
+   - `X-OpenAI-Api-Key` (required when `X-Embedding-Provider=openai`)
 6. Save the auth credentials.
 7. Set **Tools to include** → **All**.
 
@@ -97,7 +102,7 @@ docker run -d --name mcp-qdrant \
 ```bash
 # Run from GHCR (make the package public or login to GHCR first).
 docker run -d --name mcp-qdrant \
-  --network npm_default \
+  --network mcp-network \
   --env-file .env \
   --label com.centurylinklabs.watchtower.enable=true \
   ghcr.io/<owner>/mad-mcp-qdrant:latest \
@@ -136,6 +141,8 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 - `qdrant-promote-short-term`: promote short-term memories into the long-term collection.
 - `qdrant-ingest-with-validation`: validate inputs, optionally quarantine, then store.
 - `qdrant-ingest-document`: chunk a document and store as multiple points.
+  - PDF ingestion runs native text extraction plus OCR by default (`ocr=true`).
+  - OCR is local (Tesseract via `pytesseract` + `pdf2image`), not a third-party API.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
 - `qdrant-recommend-memories`: recommend memories using positive/negative examples.
@@ -242,11 +249,21 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_SERVER_VERSION`          | Optional git SHA for telemetry                                      | unset                                                             |
 | `MCP_ALLOW_REQUEST_OVERRIDES` | Allow per-request Qdrant headers                                    | `false`                                                           |
 | `MCP_REQUIRE_REQUEST_QDRANT_URL` | Require `X-Qdrant-Url` when overrides enabled                    | `true`                                                            |
+| `MCP_REQUIRE_REQUEST_QDRANT_API_KEY` | Require `X-Qdrant-Api-Key` when overrides enabled           | `false`                                                           |
 | `MCP_REQUIRE_REQUEST_COLLECTION` | Require `X-Collection-Name` when overrides enabled              | `true`                                                            |
+| `MCP_DISABLE_DEFAULT_QDRANT_FALLBACK` | Disable server-side Qdrant fallback defaults                 | `false`                                                           |
+| `MCP_DISABLE_DEFAULT_EMBEDDING_FALLBACK` | Require embedding headers for all tools                     | `false`                                                           |
 | `MCP_QDRANT_URL_HEADER`        | Header name for Qdrant URL                                         | `x-qdrant-url`                                                    |
 | `MCP_QDRANT_API_KEY_HEADER`    | Header name for Qdrant API key                                     | `x-qdrant-api-key`                                                |
 | `MCP_COLLECTION_NAME_HEADER`   | Header name for collection name                                    | `x-collection-name`                                               |
 | `MCP_QDRANT_VECTOR_NAME_HEADER` | Header name for vector name                                       | `x-qdrant-vector-name`                                            |
+| `MCP_EMBEDDING_PROVIDER_HEADER` | Header name for embedding provider                                | `x-embedding-provider`                                            |
+| `MCP_EMBEDDING_MODEL_HEADER`   | Header name for embedding model                                    | `x-embedding-model`                                               |
+| `MCP_EMBEDDING_VECTOR_SIZE_HEADER` | Header name for embedding vector size                          | `x-embedding-vector-size`                                         |
+| `MCP_OPENAI_API_KEY_HEADER`    | Header name for OpenAI API key                                     | `x-openai-api-key`                                                |
+| `MCP_OPENAI_BASE_URL_HEADER`   | Header name for OpenAI-compatible base URL                         | `x-openai-base-url`                                               |
+| `MCP_OPENAI_ORG_HEADER`        | Header name for OpenAI organization                                | `x-openai-org`                                                    |
+| `MCP_OPENAI_PROJECT_HEADER`    | Header name for OpenAI project                                     | `x-openai-project`                                                |
 | `MCP_QDRANT_HOST_ALLOWLIST`    | Comma/space-separated allowed Qdrant hostnames                     | unset                                                             |
 
 Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
@@ -260,12 +277,15 @@ Base (Qdrant + hosted overrides):
 ```bash
 QDRANT_URL=https://your-qdrant-host:6333
 QDRANT_API_KEY=your-qdrant-api-key
-COLLECTION_NAME=your-collection
+COLLECTION_NAME=
 
 # Hosted MCP: require client headers (recommended for public endpoints)
 MCP_ALLOW_REQUEST_OVERRIDES=true
 MCP_REQUIRE_REQUEST_QDRANT_URL=true
-MCP_REQUIRE_REQUEST_COLLECTION=true
+MCP_REQUIRE_REQUEST_QDRANT_API_KEY=true
+MCP_REQUIRE_REQUEST_COLLECTION=false
+MCP_DISABLE_DEFAULT_QDRANT_FALLBACK=true
+MCP_DISABLE_DEFAULT_EMBEDDING_FALLBACK=false
 MCP_QDRANT_HOST_ALLOWLIST=["*.qdrant.io"]
 ```
 
@@ -306,7 +326,10 @@ Server env:
 ```bash
 MCP_ALLOW_REQUEST_OVERRIDES=true
 MCP_REQUIRE_REQUEST_QDRANT_URL=true
-MCP_REQUIRE_REQUEST_COLLECTION=true
+MCP_REQUIRE_REQUEST_QDRANT_API_KEY=true
+MCP_REQUIRE_REQUEST_COLLECTION=false
+MCP_DISABLE_DEFAULT_QDRANT_FALLBACK=true
+MCP_DISABLE_DEFAULT_EMBEDDING_FALLBACK=false
 # Optional hardening
 MCP_QDRANT_HOST_ALLOWLIST=*.qdrant.io
 ```
@@ -314,12 +337,23 @@ MCP_QDRANT_HOST_ALLOWLIST=*.qdrant.io
 Client headers (n8n MCP node):
 
 - `X-Qdrant-Url`: user Qdrant URL (required)
-- `X-Qdrant-Api-Key`: user Qdrant API key (optional if public)
-- `X-Collection-Name`: user collection (required)
+- `X-Qdrant-Api-Key`: user Qdrant API key (required in strict hosted mode)
+- `X-Collection-Name`: user collection (optional; omit to work across collections)
 - `X-Qdrant-Vector-Name`: optional vector name override
+- `X-Embedding-Provider`: optional (`fastembed` or `openai`)
+- `X-Embedding-Model`: optional; required when provider is set
+- `X-Embedding-Vector-Size`: optional vector size override
+- `X-OpenAI-Api-Key`: required when provider is `openai`
+- `X-OpenAI-Base-Url`: optional OpenAI-compatible endpoint
+- `X-OpenAI-Org`: optional OpenAI org
+- `X-OpenAI-Project`: optional OpenAI project
 
-If you want to keep server defaults and only allow optional overrides, set
-`MCP_REQUIRE_REQUEST_QDRANT_URL=false` and `MCP_REQUIRE_REQUEST_COLLECTION=false`.
+Behavior in hosted mode:
+
+- Missing embedding headers puts the session into read-only mode.
+- Write/mutation tools are blocked until embedding headers are provided.
+- Semantic search tools (`qdrant-find`, `qdrant-find-short-term`) require embedding headers.
+- Send headers on `initialize`, then reuse `mcp-session-id` for `tools/list` and `tools/call`.
 
 Tip: If you enable request overrides for a public endpoint, do not rely on
 server-side `QDRANT_*` defaults. Require user headers and keep your own

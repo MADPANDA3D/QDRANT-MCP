@@ -187,6 +187,18 @@ class RequestOverrideSettings(BaseSettings):
         default=True,
         validation_alias="MCP_REQUIRE_REQUEST_COLLECTION",
     )
+    require_request_qdrant_api_key: bool = Field(
+        default=False,
+        validation_alias="MCP_REQUIRE_REQUEST_QDRANT_API_KEY",
+    )
+    disable_default_qdrant_fallback: bool = Field(
+        default=False,
+        validation_alias="MCP_DISABLE_DEFAULT_QDRANT_FALLBACK",
+    )
+    disable_default_embedding_fallback: bool = Field(
+        default=False,
+        validation_alias="MCP_DISABLE_DEFAULT_EMBEDDING_FALLBACK",
+    )
     qdrant_url_header: str = Field(
         default="x-qdrant-url",
         validation_alias="MCP_QDRANT_URL_HEADER",
@@ -202,6 +214,34 @@ class RequestOverrideSettings(BaseSettings):
     vector_name_header: str = Field(
         default="x-qdrant-vector-name",
         validation_alias="MCP_QDRANT_VECTOR_NAME_HEADER",
+    )
+    embedding_provider_header: str = Field(
+        default="x-embedding-provider",
+        validation_alias="MCP_EMBEDDING_PROVIDER_HEADER",
+    )
+    embedding_model_header: str = Field(
+        default="x-embedding-model",
+        validation_alias="MCP_EMBEDDING_MODEL_HEADER",
+    )
+    embedding_vector_size_header: str = Field(
+        default="x-embedding-vector-size",
+        validation_alias="MCP_EMBEDDING_VECTOR_SIZE_HEADER",
+    )
+    openai_api_key_header: str = Field(
+        default="x-openai-api-key",
+        validation_alias="MCP_OPENAI_API_KEY_HEADER",
+    )
+    openai_base_url_header: str = Field(
+        default="x-openai-base-url",
+        validation_alias="MCP_OPENAI_BASE_URL_HEADER",
+    )
+    openai_organization_header: str = Field(
+        default="x-openai-org",
+        validation_alias="MCP_OPENAI_ORG_HEADER",
+    )
+    openai_project_header: str = Field(
+        default="x-openai-project",
+        validation_alias="MCP_OPENAI_PROJECT_HEADER",
     )
     qdrant_host_allowlist: list[str] = Field(
         default_factory=list,
@@ -226,6 +266,13 @@ class RequestOverrideSettings(BaseSettings):
         self.qdrant_api_key_header = self.qdrant_api_key_header.lower()
         self.collection_name_header = self.collection_name_header.lower()
         self.vector_name_header = self.vector_name_header.lower()
+        self.embedding_provider_header = self.embedding_provider_header.lower()
+        self.embedding_model_header = self.embedding_model_header.lower()
+        self.embedding_vector_size_header = self.embedding_vector_size_header.lower()
+        self.openai_api_key_header = self.openai_api_key_header.lower()
+        self.openai_base_url_header = self.openai_base_url_header.lower()
+        self.openai_organization_header = self.openai_organization_header.lower()
+        self.openai_project_header = self.openai_project_header.lower()
         return self
 
 

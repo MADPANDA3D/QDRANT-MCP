@@ -47,6 +47,7 @@ class QdrantConnector:
         vector_name_override: str | None = None,
         qdrant_local_path: str | None = None,
         field_indexes: dict[str, models.PayloadSchemaType] | None = None,
+        request_timeout_seconds: float = 60.0,
     ):
         self._qdrant_url = qdrant_url.rstrip("/") if qdrant_url else None
         self._qdrant_api_key = qdrant_api_key
@@ -58,8 +59,12 @@ class QdrantConnector:
         )
         if self._vector_name_override == "":
             self._vector_name_override = None
+        self._request_timeout_seconds = request_timeout_seconds
         self._client = AsyncQdrantClient(
-            location=qdrant_url, api_key=qdrant_api_key, path=qdrant_local_path
+            location=qdrant_url,
+            api_key=qdrant_api_key,
+            path=qdrant_local_path,
+            timeout=request_timeout_seconds,
         )
         self._field_indexes = field_indexes
 

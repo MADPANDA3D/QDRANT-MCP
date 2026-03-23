@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import io
 import os
 import re
@@ -247,7 +248,20 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
                 empty_pages.append(idx)
             page_texts.append(text)
 
-    if ocr and (empty_pages or reader is None):
+    def _merge_text(primary_text: str, ocr_text: str) -> str:
+        primary = primary_text.strip()
+        ocr_clean = ocr_text.strip()
+        if not ocr_clean:
+            return primary
+        if not primary:
+            return ocr_clean
+        if ocr_clean in primary:
+            return primary
+        if primary in ocr_clean:
+            return ocr_clean
+        return f"{primary}\n\n{ocr_clean}"
+
+    if ocr:
         try:
             import pytesseract  # type: ignore
             from pdf2image import convert_from_bytes  # type: ignore
@@ -259,13 +273,19 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
                 if reader is None:
                     page_count = len(images)
                     page_texts = ["" for _ in range(len(images))]
-                    empty_pages = list(range(len(images)))
-                for idx in empty_pages:
+                elif len(images) != len(page_texts):
+                    warnings.append(
+                        "OCR page count differs from text extraction page count; "
+                        "processing shared page range."
+                    )
+
+                target_len = min(len(images), len(page_texts))
+                for idx in range(target_len):
                     if idx < len(images):
                         ocr_text = pytesseract.image_to_string(images[idx])
                         if ocr_text.strip():
-                            page_texts[idx] = ocr_text
-                        else:
+                            page_texts[idx] = _merge_text(page_texts[idx], ocr_text)
+                        elif not page_texts[idx].strip():
                             warnings.append(f"OCR produced no text for page {idx + 1}.")
                     else:
                         warnings.append(f"OCR image missing for page {idx + 1}.")
@@ -344,6 +364,73 @@ def _extract_doc_sections_sync(data: bytes) -> ExtractionResult:
     return ExtractionResult(sections=sections, warnings=warnings)
 
 
+def _extract_csv_sections_sync(data: bytes) -> ExtractionResult:
+    text, warnings = decode_bytes_to_text(data)
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
+        warnings.append("CSV UTF-8 BOM removed.")
+
+    sample = text[:8192]
+    has_header = False
+    dialect: csv.Dialect | type[csv.Dialect] = csv.excel
+    if sample.strip():
+        try:
+            sniffed = csv.Sniffer()
+            dialect = sniffed.sniff(sample)
+            try:
+                has_header = sniffed.has_header(sample)
+            except csv.Error:
+                has_header = False
+        except csv.Error:
+            warnings.append("CSV delimiter detection failed; defaulted to comma.")
+
+    reader = csv.reader(io.StringIO(text), dialect=dialect)
+    rows = [row for row in reader if any(cell.strip() for cell in row)]
+    if not rows:
+        warnings.append("No non-empty rows found in CSV.")
+        return ExtractionResult(sections=[], warnings=warnings)
+
+    sections: list[DocumentSection] = []
+    start_idx = 0
+    headers: list[str] = []
+    if has_header:
+        headers = [cell.strip() or f"column_{idx + 1}" for idx, cell in enumerate(rows[0])]
+        start_idx = 1
+        if not headers:
+            headers = []
+            start_idx = 0
+
+    for row_idx, row in enumerate(rows[start_idx:], start=start_idx + 1):
+        cleaned = [cell.strip() for cell in row]
+        if headers:
+            parts: list[str] = []
+            for col_idx, cell in enumerate(cleaned):
+                key = headers[col_idx] if col_idx < len(headers) else f"column_{col_idx + 1}"
+                parts.append(f"{key}: {cell}")
+            row_text = " | ".join(parts)
+        else:
+            row_text = " | ".join(cleaned)
+        row_text = row_text.strip().strip("|").strip()
+        if not row_text:
+            continue
+        sections.append(
+            DocumentSection(
+                text=f"CSV row {row_idx}: {row_text}",
+                section_heading="csv",
+            )
+        )
+
+    if not sections:
+        warnings.append("No text rows extracted from CSV.")
+
+    return ExtractionResult(
+        sections=sections,
+        page_count=len(rows),
+        warnings=warnings,
+        title_hint=headers[0] if headers else None,
+    )
+
+
 def extract_document_sections(
     file_type: str,
     *,
@@ -366,6 +453,13 @@ def extract_document_sections(
             result.warnings.extend(warnings)
             return result
         return extract_markdown_sections(text or "")
+
+    if file_type == "csv":
+        if data is None and text is not None:
+            data = text.encode("utf-8")
+        if data is None:
+            raise ValueError(".csv ingestion requires text or binary data.")
+        return _extract_csv_sections_sync(data)
 
     if file_type == "docx":
         if data is None:

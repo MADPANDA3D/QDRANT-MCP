@@ -2,12 +2,12 @@ VPS setup for mcp-server-qdrant (Nginx Proxy Manager + n8n)
 ===========================================================
 
 Goal: run mcp-server-qdrant on a VPS with Nginx Proxy Manager (NPM) and
-streamable HTTP for n8n (`/mcp/` endpoint).
+streamable HTTP for n8n (`/mcp` canonical endpoint).
 
 Prereqs
 -------
 - Docker + Docker Compose installed on the VPS
-- Nginx Proxy Manager already running (network: `npm_default`)
+- Nginx Proxy Manager already running (network: `mcp-network` (shared with NPM))
 - Qdrant Cloud URL + API key
 
 1) Clone and build
@@ -35,6 +35,8 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 # OPENAI_API_KEY=your_openai_key
 FASTMCP_SERVER_HOST=0.0.0.0
 FASTMCP_SERVER_PORT=8000
+# Trust forwarded proto/client headers only from your shared proxy network
+FORWARDED_ALLOW_IPS=172.22.0.0/16
 EOF
 ```
 
@@ -43,7 +45,7 @@ EOF
 ```bash
 docker rm -f mcp-qdrant 2>/dev/null
 docker run -d --name mcp-qdrant \
-  --network npm_default \
+  --network mcp-network \
   --env-file .env \
   mcp-server-qdrant \
   mcp-server-qdrant --transport streamable-http
@@ -63,7 +65,7 @@ build. Make sure the GHCR package is public (or login to GHCR first).
 ```bash
 docker rm -f mcp-qdrant 2>/dev/null
 docker run -d --name mcp-qdrant \
-  --network npm_default \
+  --network mcp-network \
   --env-file .env \
   --label com.centurylinklabs.watchtower.enable=true \
   ghcr.io/<owner>/mad-mcp-qdrant:latest \
@@ -85,11 +87,34 @@ Create a Proxy Host:
 - Websockets: ON
 - SSL: ON (Let's Encrypt)
 
+Advanced (exact path behavior):
+```nginx
+location = /mcp {
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection $http_connection;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Scheme $scheme;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_buffering off;
+  proxy_read_timeout 3600s;
+  proxy_pass http://mcp-qdrant:8000/mcp/;
+}
+
+location = /mcp/ {
+  default_type application/json;
+  add_header Cache-Control "no-store";
+  return 410 '{"error":"deprecated_endpoint","message":"Deprecated MCP URL. Use https://qdrant-mcp.yourdomain.com/mcp (remove trailing slash)."}';
+}
+```
+
 5) Test over the domain
 -----------------------
 Initialize (creates a session):
 ```bash
-curl -i -X POST https://qdrant-mcp.yourdomain.com/mcp/ \
+curl -i -X POST https://qdrant-mcp.yourdomain.com/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
@@ -97,7 +122,7 @@ curl -i -X POST https://qdrant-mcp.yourdomain.com/mcp/ \
 
 Use the `mcp-session-id` from the response:
 ```bash
-curl -i https://qdrant-mcp.yourdomain.com/mcp/ \
+curl -i https://qdrant-mcp.yourdomain.com/mcp \
   -H "Accept: text/event-stream" \
   -H "mcp-session-id: <PASTE_ID_HERE>"
 ```
@@ -106,11 +131,12 @@ curl -i https://qdrant-mcp.yourdomain.com/mcp/ \
 --------------
 Use:
 ```
-https://qdrant-mcp.yourdomain.com/mcp/
+https://qdrant-mcp.yourdomain.com/mcp
 ```
 
 Notes
 -----
-- The streamable HTTP endpoint is `/mcp/` (trailing slash matters).
+- Canonical public endpoint is `/mcp` (no trailing slash).
+- Deprecated endpoint `/mcp/` should return `410 Gone` with a migration message.
 - If you see `Bad Request: Missing session ID`, you need to run
   the initialize request first.
