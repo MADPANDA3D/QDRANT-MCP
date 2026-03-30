@@ -439,38 +439,66 @@ class QdrantConnector:
         """
         collection_exists = await self._client.collection_exists(collection_name)
         if not collection_exists:
-            # Create the collection with the appropriate vector size
-            vector_size = self._embedding_provider.get_vector_size()
-
-            # Use the vector name as defined in the embedding provider
-            vector_name = await self._resolve_vector_name(collection_name)
-            if vector_name is None and self._vector_name_override_set:
-                vectors_config: models.VectorsConfig = models.VectorParams(
-                    size=vector_size, distance=models.Distance.COSINE
-                )
-            else:
-                if vector_name is None:
-                    vector_name = self._embedding_provider.get_vector_name()
-                vectors_config = {
-                    vector_name: models.VectorParams(
-                        size=vector_size,
-                        distance=models.Distance.COSINE,
-                    )
-                }
+            vectors_config, _, _ = self._build_vectors_config(
+                vector_name=self._vector_name_override,
+                vector_name_is_explicit=self._vector_name_override_set,
+            )
             await self._client.create_collection(
                 collection_name=collection_name,
                 vectors_config=vectors_config,
             )
+            await self._apply_default_payload_indexes(collection_name)
 
-            # Create payload indexes if configured
+    async def create_collection(
+        self,
+        collection_name: str,
+        *,
+        vector_name: str | None = None,
+    ) -> dict[str, Any]:
+        name = collection_name.strip()
+        if not name:
+            raise ValueError("collection_name is required")
 
-            if self._field_indexes:
-                for field_name, field_type in self._field_indexes.items():
-                    await self._client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name=field_name,
-                        field_schema=field_type,
-                    )
+        vector_name_is_explicit = vector_name is not None
+        sanitized_vector_name = vector_name.strip() if vector_name is not None else None
+        if sanitized_vector_name == "":
+            sanitized_vector_name = None
+
+        if await self._client.collection_exists(name):
+            return {
+                "collection_name": name,
+                "created": False,
+                "already_exists": True,
+                "vectors": await self.get_collection_vectors(name),
+                "payload_schema": await self.get_collection_payload_schema(name),
+                "indexes_applied": [],
+            }
+
+        if not vector_name_is_explicit:
+            sanitized_vector_name = self._vector_name_override
+            vector_name_is_explicit = self._vector_name_override_set
+
+        vectors_config, resolved_vector_name, vector_size = self._build_vectors_config(
+            vector_name=sanitized_vector_name,
+            vector_name_is_explicit=vector_name_is_explicit,
+        )
+        await self._client.create_collection(
+            collection_name=name,
+            vectors_config=vectors_config,
+        )
+        indexes_applied = await self._apply_default_payload_indexes(name)
+
+        return {
+            "collection_name": name,
+            "created": True,
+            "already_exists": False,
+            "vector_name": resolved_vector_name,
+            "vector_size": vector_size,
+            "distance": models.Distance.COSINE.value,
+            "vectors": await self.get_collection_vectors(name),
+            "payload_schema": await self.get_collection_payload_schema(name),
+            "indexes_applied": indexes_applied,
+        }
 
     async def get_collection_info(
         self, collection_name: str | None = None
@@ -604,6 +632,67 @@ class QdrantConnector:
 
     async def resolve_vector_name(self, collection_name: str) -> str | None:
         return await self._resolve_vector_name(collection_name)
+
+    async def _apply_default_payload_indexes(self, collection_name: str) -> list[str]:
+        applied: list[str] = []
+        if self._field_indexes:
+            for field_name, field_type in self._field_indexes.items():
+                await self._client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=field_type,
+                )
+                applied.append(field_name)
+        return applied
+
+    def _build_vectors_config(
+        self,
+        *,
+        vector_name: str | None,
+        vector_name_is_explicit: bool,
+    ) -> tuple[models.VectorsConfig, str | None, int]:
+        vector_size = self._embedding_provider.get_vector_size()
+        if vector_name_is_explicit:
+            if vector_name is None:
+                return (
+                    models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    ),
+                    None,
+                    vector_size,
+                )
+            return (
+                {
+                    vector_name: models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    )
+                },
+                vector_name,
+                vector_size,
+            )
+
+        provider_vector_name = self._embedding_provider.get_vector_name()
+        if provider_vector_name is None:
+            return (
+                models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                ),
+                None,
+                vector_size,
+            )
+        return (
+            {
+                provider_vector_name: models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                )
+            },
+            provider_vector_name,
+            vector_size,
+        )
 
     def _vector_params_to_dict(self, params: models.VectorParams) -> dict[str, Any]:
         distance = params.distance

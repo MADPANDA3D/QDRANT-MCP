@@ -396,7 +396,9 @@ class QdrantMCPServer(FastMCP):
         version = "unknown"
 
         provider_obj = provider or self.embedding_provider
-        settings_obj = settings if settings is not None else self.embedding_provider_settings
+        settings_obj = (
+            settings if settings is not None else self.embedding_provider_settings
+        )
 
         if settings_obj:
             provider_name = settings_obj.provider_type.value
@@ -423,14 +425,19 @@ class QdrantMCPServer(FastMCP):
         Register the tools in the server.
         """
 
-        def resolve_collection_name(collection_name: str) -> str:
+        missing_collection_message = (
+            "Tool requires a collection, provide `collection_name` arg or "
+            "`X-Collection-Name` header."
+        )
+
+        def resolve_collection_name(collection_name: str | None) -> str:
             name = collection_name.strip() if collection_name else ""
             if name:
                 return name
             default_name = self._get_default_collection_name()
             if default_name:
                 return default_name
-            raise ValueError("collection_name is required")
+            raise ValueError(missing_collection_message)
 
         def resolve_health_collection(collection_name: str | None) -> str:
             name = collection_name.strip() if collection_name else ""
@@ -669,7 +676,10 @@ class QdrantMCPServer(FastMCP):
             key_parts = [
                 source_url.strip(),
                 doc_hash.strip(),
-                *[str(metadata[field]).strip().lower() for field in TEXTBOOK_REQUIRED_METADATA],
+                *[
+                    str(metadata[field]).strip().lower()
+                    for field in TEXTBOOK_REQUIRED_METADATA
+                ],
             ]
             return hashlib.sha256("|".join(key_parts).encode("utf-8")).hexdigest()
 
@@ -1184,7 +1194,9 @@ class QdrantMCPServer(FastMCP):
 
             allowed = {"txt", "md", "csv", "pdf", "doc", "docx"}
             if candidate not in allowed:
-                raise ValueError("file_type must be one of: txt, md, csv, pdf, doc, docx.")
+                raise ValueError(
+                    "file_type must be one of: txt, md, csv, pdf, doc, docx."
+                )
             return candidate
 
         def parse_base64_payload(value: str) -> bytes:
@@ -4976,6 +4988,33 @@ class QdrantMCPServer(FastMCP):
             data = {"collections": collections, "count": len(collections)}
             return finish_request(state, data)
 
+        async def create_collection(
+            ctx: Context,
+            collection_name: Annotated[
+                str, Field(description="Name of the collection to create.")
+            ],
+            vector_name: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Optional vector name override. Use empty string for an "
+                        "unnamed/default vector."
+                    )
+                ),
+            ] = None,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {"collection_name": collection_name, "vector_name": vector_name},
+            )
+            ensure_mutations_allowed()
+            result = await self.qdrant_connector.create_collection(
+                collection_name,
+                vector_name=vector_name,
+            )
+            result["indexes_applied_count"] = len(result.get("indexes_applied", []))
+            return finish_request(state, result)
+
         async def collection_exists(
             ctx: Context, collection_name: str = ""
         ) -> dict[str, Any]:
@@ -5795,7 +5834,9 @@ class QdrantMCPServer(FastMCP):
                                 message="chunk_size must be positive.",
                             )
 
-                        resolved_overlap = 200 if chunk_overlap is None else chunk_overlap
+                        resolved_overlap = (
+                            200 if chunk_overlap is None else chunk_overlap
+                        )
                         if resolved_overlap < 0:
                             raise StructuredIngestError(
                                 error_code="textbook_validation_error",
@@ -5828,18 +5869,22 @@ class QdrantMCPServer(FastMCP):
                                     for key, value in source_url_headers.items()
                                 }
                             )
-                        file_bytes, fetched_mime, bytes_downloaded = (
-                            await fetch_url_data_streaming(
-                                source_url,
-                                headers=request_headers,
-                                max_bytes=self.memory_settings.textbook_max_file_bytes,
-                                timeout_seconds=min(
-                                    120, self.memory_settings.textbook_job_timeout_seconds
-                                ),
-                            )
+                        (
+                            file_bytes,
+                            fetched_mime,
+                            bytes_downloaded,
+                        ) = await fetch_url_data_streaming(
+                            source_url,
+                            headers=request_headers,
+                            max_bytes=self.memory_settings.textbook_max_file_bytes,
+                            timeout_seconds=min(
+                                120, self.memory_settings.textbook_job_timeout_seconds
+                            ),
                         )
                         ctx.set_metric("bytes_downloaded", bytes_downloaded)
-                        inferred_file_name = Path(urlparse(source_url).path).name or "textbook.pdf"
+                        inferred_file_name = (
+                            Path(urlparse(source_url).path).name or "textbook.pdf"
+                        )
                         resolved_file_type = normalize_file_type(
                             file_type=None,
                             file_name=inferred_file_name,
@@ -5898,10 +5943,12 @@ class QdrantMCPServer(FastMCP):
                             if not normalized_text:
                                 continue
                             extracted_chars += len(normalized_text)
-                            chapter_num, chapter_title = resolve_chapter_metadata_for_page(
-                                section.page_start,
-                                chapter_map=resolved_chapter_map,
-                                detected_markers=detected_markers,
+                            chapter_num, chapter_title = (
+                                resolve_chapter_metadata_for_page(
+                                    section.page_start,
+                                    chapter_map=resolved_chapter_map,
+                                    detected_markers=detected_markers,
+                                )
                             )
                             section_chunks = chunk_text_with_overlap(
                                 normalized_text,
@@ -5993,7 +6040,9 @@ class QdrantMCPServer(FastMCP):
                             if spec.get("page_end") is not None:
                                 chunk_metadata["page_end"] = spec["page_end"]
                             if spec.get("section_heading"):
-                                chunk_metadata["section_heading"] = spec["section_heading"]
+                                chunk_metadata["section_heading"] = spec[
+                                    "section_heading"
+                                ]
                             if spec.get("chapter") is not None:
                                 chunk_metadata["chapter"] = spec["chapter"]
                             if spec.get("chapter_title"):
@@ -6119,8 +6168,8 @@ class QdrantMCPServer(FastMCP):
                         ) -> list[str]:
                             async with semaphore:
                                 texts = [entry.content for entry in batch_entries]
-                                embeddings = await self.embedding_provider.embed_documents(
-                                    texts
+                                embeddings = (
+                                    await self.embedding_provider.embed_documents(texts)
                                 )
                                 points: list[models.PointStruct] = []
                                 point_ids: list[str] = []
@@ -6132,9 +6181,9 @@ class QdrantMCPServer(FastMCP):
                                         METADATA_PATH: entry.metadata,
                                     }
                                     if vector_name is None:
-                                        vector_payload: list[float] | dict[str, list[float]] = (
-                                            embedding
-                                        )
+                                        vector_payload: (
+                                            list[float] | dict[str, list[float]]
+                                        ) = embedding
                                     else:
                                         vector_payload = {vector_name: embedding}
                                     points.append(
@@ -6223,7 +6272,7 @@ class QdrantMCPServer(FastMCP):
 
             job_id = uuid.uuid4().hex
             now = datetime.now(timezone.utc).isoformat()
-            record = {
+            record: dict[str, Any] = {
                 "job_id": job_id,
                 "job_type": job_key,
                 "status": "queued",
@@ -6754,64 +6803,128 @@ class QdrantMCPServer(FastMCP):
                 {"collection_name": self.qdrant_settings.collection_name},
             )
 
-        self.tool(
+        collection_required_tag = "[Requires collection name]"
+        collection_required_tool_names = {
+            "qdrant-find",
+            "qdrant-recommend-memories",
+            "qdrant-list-points",
+            "qdrant-get-points",
+            "qdrant-count-points",
+            "qdrant-audit-memories",
+            "qdrant-find-near-duplicates",
+            "qdrant-ingest-textbook",
+            "qdrant-collection-exists",
+            "qdrant-collection-info",
+            "qdrant-collection-stats",
+            "qdrant-collection-vectors",
+            "qdrant-collection-payload-schema",
+            "qdrant-optimizer-status",
+            "qdrant-metrics-snapshot",
+            "qdrant-get-vector-name",
+            "qdrant-collection-aliases",
+            "qdrant-collection-cluster-info",
+            "qdrant-list-snapshots",
+            "qdrant-create-snapshot",
+            "qdrant-restore-snapshot",
+            "qdrant-list-shard-snapshots",
+            "qdrant-create-collection",
+            "qdrant-store",
+            "qdrant-promote-short-term",
+            "qdrant-ingest-with-validation",
+            "qdrant-ingest-document",
+            "qdrant-ensure-payload-indexes",
+            "qdrant-backfill-memory-contract",
+            "qdrant-update-point",
+            "qdrant-patch-payload",
+            "qdrant-tag-memories",
+            "qdrant-link-memories",
+            "qdrant-reembed-points",
+            "qdrant-bulk-patch",
+            "qdrant-dedupe-memories",
+            "qdrant-merge-duplicates",
+            "qdrant-expire-memories",
+            "qdrant-update-optimizer-config",
+            "qdrant-delete-points",
+            "qdrant-delete-by-filter",
+            "qdrant-delete-document",
+        }
+
+        def register_tool(
+            tool_fn: Any,
+            *,
+            name: str,
+            description: str,
+        ) -> None:
+            final_description = description
+            if (
+                name in collection_required_tool_names
+                and collection_required_tag not in final_description
+            ):
+                final_description = f"{description} {collection_required_tag}"
+            self.tool(
+                tool_fn,
+                name=name,
+                description=final_description,
+            )
+
+        register_tool(
             health_check,
             name="qdrant-health-check",
             description="Run health checks against Qdrant and embedding clients.",
         )
 
-        self.tool(
+        register_tool(
             find_foo,
             name="qdrant-find",
             description=self.tool_settings.tool_find_description,
         )
         if short_term_find_foo is not None:
-            self.tool(
+            register_tool(
                 short_term_find_foo,
                 name="qdrant-find-short-term",
                 description="Search the short-term memory cache collection.",
             )
-        self.tool(
+        register_tool(
             recommend_memories_foo,
             name="qdrant-recommend-memories",
             description="Recommend memories using positive/negative example ids.",
         )
-        self.tool(
+        register_tool(
             validate_memory_foo,
             name="qdrant-validate-memory",
             description="Validate memory contract fields before ingest.",
         )
-        self.tool(
+        register_tool(
             list_points_foo,
             name="qdrant-list-points",
             description="List points with pagination (scroll).",
         )
-        self.tool(
+        register_tool(
             get_points_foo,
             name="qdrant-get-points",
             description="Retrieve points by id.",
         )
-        self.tool(
+        register_tool(
             count_points_foo,
             name="qdrant-count-points",
             description="Count points matching an optional filter.",
         )
-        self.tool(
+        register_tool(
             audit_memories_foo,
             name="qdrant-audit-memories",
             description="Audit memory payloads for missing fields and duplicates.",
         )
-        self.tool(
+        register_tool(
             find_near_duplicates_foo,
             name="qdrant-find-near-duplicates",
             description="Find near-duplicate points using vector similarity.",
         )
-        self.tool(
+        register_tool(
             submit_job,
             name="qdrant-submit-job",
             description="Submit a long-running housekeeping job.",
         )
-        self.tool(
+        register_tool(
             ingest_textbook,
             name="qdrant-ingest-textbook",
             description=(
@@ -6819,219 +6932,228 @@ class QdrantMCPServer(FastMCP):
                 "Returns immediately with a job_id."
             ),
         )
-        self.tool(
+        register_tool(
             get_ingest_status,
             name="qdrant-get-ingest-status",
             description="Get status, progress, metrics, and structured errors for a textbook ingest job.",
         )
-        self.tool(
+        register_tool(
             cancel_ingest,
             name="qdrant-cancel-ingest",
             description="Cancel a running textbook ingest job.",
         )
-        self.tool(
+        register_tool(
             job_status,
             name="qdrant-job-status",
             description="Check status for a submitted job.",
         )
-        self.tool(
+        register_tool(
             job_progress,
             name="qdrant-job-progress",
             description="Get progress for a submitted job.",
         )
-        self.tool(
+        register_tool(
             job_logs,
             name="qdrant-job-logs",
             description="Fetch recent logs for a submitted job.",
         )
-        self.tool(
+        register_tool(
             job_result,
             name="qdrant-job-result",
             description="Fetch the result for a completed job.",
         )
-        self.tool(
+        register_tool(
             cancel_job,
             name="qdrant-cancel-job",
             description="Cancel a running job.",
         )
 
-        self.tool(
+        register_tool(
             list_collections,
             name="qdrant-list-collections",
             description="List all Qdrant collections.",
         )
-        self.tool(
+        if not self.qdrant_settings.read_only:
+            register_tool(
+                create_collection,
+                name="qdrant-create-collection",
+                description=(
+                    "Create a collection with embedding-compatible vector settings "
+                    "and default payload indexes."
+                ),
+            )
+        register_tool(
             collection_exists,
             name="qdrant-collection-exists",
             description="Check if a collection exists.",
         )
-        self.tool(
+        register_tool(
             collection_info,
             name="qdrant-collection-info",
             description="Get collection details including vectors and payload schema.",
         )
-        self.tool(
+        register_tool(
             collection_stats,
             name="qdrant-collection-stats",
             description="Get basic collection statistics (points, segments, status).",
         )
-        self.tool(
+        register_tool(
             collection_vectors,
             name="qdrant-collection-vectors",
             description="List vector names and sizes for a collection.",
         )
-        self.tool(
+        register_tool(
             collection_payload_schema,
             name="qdrant-collection-payload-schema",
             description="Get payload schema for a collection.",
         )
-        self.tool(
+        register_tool(
             optimizer_status,
             name="qdrant-optimizer-status",
             description="Get optimizer config and index coverage for a collection.",
         )
-        self.tool(
+        register_tool(
             metrics_snapshot,
             name="qdrant-metrics-snapshot",
             description="Snapshot collection stats and index coverage metrics.",
         )
-        self.tool(
+        register_tool(
             get_vector_name,
             name="qdrant-get-vector-name",
             description="Resolve the vector name used by this MCP server.",
         )
-        self.tool(
+        register_tool(
             list_aliases,
             name="qdrant-list-aliases",
             description="List all collection aliases.",
         )
-        self.tool(
+        register_tool(
             collection_aliases,
             name="qdrant-collection-aliases",
             description="List aliases for a specific collection.",
         )
-        self.tool(
+        register_tool(
             collection_cluster_info,
             name="qdrant-collection-cluster-info",
             description="Get cluster info for a collection.",
         )
-        self.tool(
+        register_tool(
             list_snapshots,
             name="qdrant-list-snapshots",
             description="List snapshots for a collection.",
         )
-        self.tool(
+        register_tool(
             create_snapshot,
             name="qdrant-create-snapshot",
             description="Create a collection snapshot (admin-only, confirm required).",
         )
-        self.tool(
+        register_tool(
             restore_snapshot,
             name="qdrant-restore-snapshot",
             description="Restore a collection snapshot (admin-only, confirm required).",
         )
-        self.tool(
+        register_tool(
             list_full_snapshots,
             name="qdrant-list-full-snapshots",
             description="List full cluster snapshots.",
         )
-        self.tool(
+        register_tool(
             list_shard_snapshots,
             name="qdrant-list-shard-snapshots",
             description="List snapshots for a specific shard.",
         )
 
         if not self.qdrant_settings.read_only:
-            self.tool(
+            register_tool(
                 store_foo,
                 name="qdrant-store",
                 description=self.tool_settings.tool_store_description,
             )
-            self.tool(
+            register_tool(
                 cache_memory_foo,
                 name="qdrant-cache-memory",
                 description="Store short-term memory with a TTL in a cache collection.",
             )
-            self.tool(
+            register_tool(
                 promote_short_term_foo,
                 name="qdrant-promote-short-term",
                 description="Promote short-term memories into the long-term collection.",
             )
-            self.tool(
+            register_tool(
                 ingest_with_validation_foo,
                 name="qdrant-ingest-with-validation",
                 description="Store memory with contract validation and quarantine support.",
             )
-            self.tool(
+            register_tool(
                 ingest_document,
                 name="qdrant-ingest-document",
                 description=(
                     "Ingest documents (txt, md, csv, pdf, doc, docx) by extracting text and storing chunks."
                 ),
             )
-            self.tool(
+            register_tool(
                 ensure_payload_indexes,
                 name="qdrant-ensure-payload-indexes",
                 description="Ensure expected payload indexes exist for a collection.",
             )
-            self.tool(
+            register_tool(
                 backfill_memory_contract,
                 name="qdrant-backfill-memory-contract",
                 description="Backfill missing memory contract fields for existing points.",
             )
-            self.tool(
+            register_tool(
                 update_foo,
                 name="qdrant-update-point",
                 description="Update an existing point (re-embeds content).",
             )
-            self.tool(
+            register_tool(
                 patch_foo,
                 name="qdrant-patch-payload",
                 description="Patch payload metadata for a point.",
             )
-            self.tool(
+            register_tool(
                 tag_memories_foo,
                 name="qdrant-tag-memories",
                 description="Append or replace labels for a set of points.",
             )
-            self.tool(
+            register_tool(
                 link_memories_foo,
                 name="qdrant-link-memories",
                 description="Link memories via related_ids and optional associations.",
             )
-            self.tool(
+            register_tool(
                 reembed_points_foo,
                 name="qdrant-reembed-points",
                 description="Re-embed points when embedding version changes.",
             )
-            self.tool(
+            register_tool(
                 bulk_patch_foo,
                 name="qdrant-bulk-patch",
                 description="Apply metadata/payload patches to points by id or filter.",
             )
-            self.tool(
+            register_tool(
                 dedupe_memories_foo,
                 name="qdrant-dedupe-memories",
                 description="Find and optionally delete duplicate memories.",
             )
-            self.tool(
+            register_tool(
                 merge_duplicates_foo,
                 name="qdrant-merge-duplicates",
                 description="Merge duplicate points into a canonical point.",
             )
-            self.tool(
+            register_tool(
                 expire_memories_foo,
                 name="qdrant-expire-memories",
                 description="Expire memories by expires_at_ts (optional archive).",
             )
             if short_term_expire_foo is not None:
-                self.tool(
+                register_tool(
                     short_term_expire_foo,
                     name="qdrant-expire-short-term",
                     description="Expire short-term memories by expires_at_ts.",
                 )
             if self.tool_settings.admin_tools_enabled:
-                self.tool(
+                register_tool(
                     update_optimizer_config,
                     name="qdrant-update-optimizer-config",
                     description=(
@@ -7039,17 +7161,17 @@ class QdrantMCPServer(FastMCP):
                         "required)."
                     ),
                 )
-            self.tool(
+            register_tool(
                 delete_points_foo,
                 name="qdrant-delete-points",
                 description="Delete points by id (confirm required).",
             )
-            self.tool(
+            register_tool(
                 delete_filter_foo,
                 name="qdrant-delete-by-filter",
                 description="Delete points by filter (confirm required).",
             )
-            self.tool(
+            register_tool(
                 delete_document,
                 name="qdrant-delete-document",
                 description="Delete all chunks for a document by doc_id (confirm required).",

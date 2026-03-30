@@ -93,7 +93,9 @@ def normalize_chapter_map(
         chapter_title = item.get("chapter_title")
 
         if not isinstance(start_page, int) or start_page <= 0:
-            raise ValueError(f"chapter_map[{idx}].start_page must be a positive integer.")
+            raise ValueError(
+                f"chapter_map[{idx}].start_page must be a positive integer."
+            )
         if end_page is not None and (
             not isinstance(end_page, int) or end_page < start_page
         ):
@@ -507,7 +509,9 @@ def _extract_csv_sections_sync(data: bytes) -> ExtractionResult:
     start_idx = 0
     headers: list[str] = []
     if has_header:
-        headers = [cell.strip() or f"column_{idx + 1}" for idx, cell in enumerate(rows[0])]
+        headers = [
+            cell.strip() or f"column_{idx + 1}" for idx, cell in enumerate(rows[0])
+        ]
         start_idx = 1
         if not headers:
             headers = []
@@ -518,7 +522,11 @@ def _extract_csv_sections_sync(data: bytes) -> ExtractionResult:
         if headers:
             parts: list[str] = []
             for col_idx, cell in enumerate(cleaned):
-                key = headers[col_idx] if col_idx < len(headers) else f"column_{col_idx + 1}"
+                key = (
+                    headers[col_idx]
+                    if col_idx < len(headers)
+                    else f"column_{col_idx + 1}"
+                )
                 parts.append(f"{key}: {cell}")
             row_text = " | ".join(parts)
         else:

@@ -32,6 +32,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
     """
     Qdrant MCP server with per-request connection overrides via HTTP headers.
     """
+
     _MUTATION_TOOL_NAMES = {
         "qdrant-store",
         "qdrant-cache-memory",
@@ -40,6 +41,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         "qdrant-ingest-document",
         "qdrant-ingest-textbook",
         "qdrant-ensure-payload-indexes",
+        "qdrant-create-collection",
         "qdrant-backfill-memory-contract",
         "qdrant-update-point",
         "qdrant-patch-payload",
@@ -161,7 +163,9 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         provider_raw = normalized.get(
             self.request_override_settings.embedding_provider_header, ""
         ).lower()
-        model_name = normalized.get(self.request_override_settings.embedding_model_header, "")
+        model_name = normalized.get(
+            self.request_override_settings.embedding_model_header, ""
+        )
         vector_size_raw = normalized.get(
             self.request_override_settings.embedding_vector_size_header, ""
         )
@@ -210,7 +214,9 @@ class HostedQdrantMCPServer(QdrantMCPServer):
                 self.request_override_settings.embedding_provider_header
             )
         if not model_name:
-            missing_required.append(self.request_override_settings.embedding_model_header)
+            missing_required.append(
+                self.request_override_settings.embedding_model_header
+            )
 
         if provider_raw and provider_raw not in {
             EmbeddingProviderType.OPENAI.value,
@@ -222,7 +228,9 @@ class HostedQdrantMCPServer(QdrantMCPServer):
             )
 
         if provider_raw == EmbeddingProviderType.OPENAI.value and not openai_api_key:
-            missing_required.append(self.request_override_settings.openai_api_key_header)
+            missing_required.append(
+                self.request_override_settings.openai_api_key_header
+            )
 
         if missing_required:
             raise ValueError(
@@ -301,7 +309,10 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         missing_required: list[str] = []
         if self.request_override_settings.require_request_qdrant_url and not url:
             missing_required.append(self.request_override_settings.qdrant_url_header)
-        if self.request_override_settings.require_request_qdrant_api_key and not api_key:
+        if (
+            self.request_override_settings.require_request_qdrant_api_key
+            and not api_key
+        ):
             missing_required.append(
                 self.request_override_settings.qdrant_api_key_header
             )

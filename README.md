@@ -200,6 +200,7 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 - `qdrant-optimizer-status`: report optimizer and segment status.
 - `qdrant-update-optimizer-config`: update optimizer settings (admin).
 - `qdrant-list-collections`: list all collections.
+- `qdrant-create-collection`: create a collection with embedding-compatible vector settings and default payload indexes.
 - `qdrant-collection-exists`: check if a collection exists.
 - `qdrant-collection-info`: fetch collection config and metadata.
 - `qdrant-collection-stats`: read collection stats (points, segments).
@@ -366,6 +367,8 @@ Behavior in hosted mode:
 - Missing embedding headers puts the session into read-only mode.
 - Write/mutation tools are blocked until embedding headers are provided.
 - Semantic search tools (`qdrant-find`, `qdrant-find-short-term`) require embedding headers.
+- Collection-scoped tools remain visible in `tools/list` and include the marker `[Requires collection name]`.
+- You can create collections without `X-Collection-Name` by calling `qdrant-create-collection` with `collection_name` in tool args.
 - Send headers on `initialize`, then reuse `mcp-session-id` for `tools/list` and `tools/call`.
 
 Tip: If you enable request overrides for a public endpoint, do not rely on
