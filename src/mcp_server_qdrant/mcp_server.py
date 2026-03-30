@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 import uuid
 from collections.abc import Mapping
 from contextvars import ContextVar
@@ -30,11 +31,20 @@ from qdrant_client import models
 
 from mcp_server_qdrant.common.filters import make_indexes
 from mcp_server_qdrant.common.func_tools import make_partial_function
-from mcp_server_qdrant.common.telemetry import finish_request, new_request
+from mcp_server_qdrant.common.telemetry import (
+    SERVER_INSTANCE_ID,
+    SERVER_START,
+    finish_request,
+    new_request,
+)
 from mcp_server_qdrant.common.wrap_filters import wrap_filters
 from mcp_server_qdrant.document_ingest import (
     chunk_text_with_overlap,
+    detect_pdf_chapter_markers,
     extract_document_sections,
+    normalize_chapter_map,
+    normalize_text_for_chunking,
+    resolve_chapter_metadata_for_page,
 )
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant.embeddings.factory import create_embedding_provider
@@ -75,6 +85,43 @@ class RequestQdrantOverrides:
     embedding_provider: EmbeddingProvider | None = None
     embedding_provider_settings: EmbeddingProviderSettings | None = None
     embedding_info: EmbeddingInfo | None = None
+
+
+class StructuredIngestError(Exception):
+    def __init__(
+        self,
+        *,
+        error_code: str,
+        suggested_http_status: int,
+        stage: str,
+        message: str,
+        limit_name: str | None = None,
+        limit_value: int | None = None,
+        actual_value: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.suggested_http_status = suggested_http_status
+        self.stage = stage
+        self.message = message
+        self.limit_name = limit_name
+        self.limit_value = limit_value
+        self.actual_value = actual_value
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "error_code": self.error_code,
+            "suggested_http_status": self.suggested_http_status,
+            "stage": self.stage,
+            "message": self.message,
+        }
+        if self.limit_name is not None:
+            payload["limit_name"] = self.limit_name
+        if self.limit_value is not None:
+            payload["limit_value"] = self.limit_value
+        if self.actual_value is not None:
+            payload["actual_value"] = self.actual_value
+        return payload
 
 
 # FastMCP is an alternative interface for declaring the capabilities
@@ -472,6 +519,15 @@ class QdrantMCPServer(FastMCP):
         DRY_RUN_MAX_LIST_ITEMS = 10
         JOB_LOG_LIMIT = 200
         PREVIEW_SCAN_LIMIT = 2000
+        TEXTBOOK_REQUIRED_METADATA = (
+            "class",
+            "material_type",
+            "title",
+            "author",
+            "edition",
+            "isbn",
+        )
+        TEXTBOOK_OPTIONAL_METADATA = ("publisher", "chapter", "chapter_title")
 
         def extract_vector(
             raw_vector: Any, vector_name: str | None
@@ -517,6 +573,131 @@ class QdrantMCPServer(FastMCP):
                 if key in metadata:
                     result[key] = compact_value(metadata.get(key))
             return result
+
+        def build_structured_error_payload(
+            *,
+            error_code: str,
+            suggested_http_status: int,
+            stage: str,
+            message: str,
+            limit_name: str | None = None,
+            limit_value: int | None = None,
+            actual_value: int | None = None,
+        ) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "error_code": error_code,
+                "suggested_http_status": suggested_http_status,
+                "stage": stage,
+                "message": message,
+            }
+            if limit_name is not None:
+                payload["limit_name"] = limit_name
+            if limit_value is not None:
+                payload["limit_value"] = limit_value
+            if actual_value is not None:
+                payload["actual_value"] = actual_value
+            return payload
+
+        def normalized_required_text(
+            metadata: dict[str, Any],
+            key: str,
+            *,
+            stage: str,
+        ) -> str:
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise StructuredIngestError(
+                    error_code="textbook_validation_error",
+                    suggested_http_status=422,
+                    stage=stage,
+                    message=(
+                        f"metadata.{key} is required and must be a non-empty string."
+                    ),
+                )
+            return value.strip()
+
+        def normalize_textbook_metadata(
+            metadata: Metadata | None,
+            *,
+            stage: str = "validate_input",
+        ) -> dict[str, Any]:
+            if not isinstance(metadata, dict):
+                raise StructuredIngestError(
+                    error_code="textbook_validation_error",
+                    suggested_http_status=422,
+                    stage=stage,
+                    message="metadata is required and must be an object.",
+                )
+
+            normalized = dict(metadata)
+            for key in TEXTBOOK_REQUIRED_METADATA:
+                normalized[key] = normalized_required_text(normalized, key, stage=stage)
+
+            for key in TEXTBOOK_OPTIONAL_METADATA:
+                value = normalized.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    normalized[key] = value.strip()
+                elif key == "chapter" and isinstance(value, int):
+                    normalized[key] = value
+                else:
+                    expected = "a string or integer" if key == "chapter" else "a string"
+                    raise StructuredIngestError(
+                        error_code="textbook_validation_error",
+                        suggested_http_status=422,
+                        stage=stage,
+                        message=f"metadata.{key} must be {expected}.",
+                    )
+            return normalized
+
+        def build_textbook_doc_id(metadata: dict[str, Any]) -> str:
+            key_parts = [
+                str(metadata[field]).strip().lower()
+                for field in TEXTBOOK_REQUIRED_METADATA
+            ]
+            raw = "|".join(key_parts)
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            return f"textbook-{digest[:24]}"
+
+        def build_textbook_ingest_fingerprint(
+            *,
+            source_url: str,
+            doc_hash: str,
+            metadata: dict[str, Any],
+        ) -> str:
+            key_parts = [
+                source_url.strip(),
+                doc_hash.strip(),
+                *[str(metadata[field]).strip().lower() for field in TEXTBOOK_REQUIRED_METADATA],
+            ]
+            return hashlib.sha256("|".join(key_parts).encode("utf-8")).hexdigest()
+
+        def raise_limit_error(
+            *,
+            stage: str,
+            limit_name: str,
+            limit_value: int,
+            actual_value: int,
+            message: str | None = None,
+        ) -> None:
+            detail = message or (
+                f"{limit_name} exceeded. limit={limit_value}, actual={actual_value}."
+            )
+            raise StructuredIngestError(
+                error_code="textbook_limit_exceeded",
+                suggested_http_status=413,
+                stage=stage,
+                message=detail,
+                limit_name=limit_name,
+                limit_value=limit_value,
+                actual_value=actual_value,
+            )
+
+        def chunks_of(items: list[Any], size: int) -> list[list[Any]]:
+            if size <= 0:
+                return [items]
+            return [items[i : i + size] for i in range(0, len(items), size)]
 
         def diff_metadata(
             before: dict[str, Any],
@@ -1024,6 +1205,37 @@ class QdrantMCPServer(FastMCP):
                     data = response.read()
                     content_type = response.headers.get("Content-Type")
                 return data, content_type
+
+            return await asyncio.to_thread(_fetch)
+
+        async def fetch_url_data_streaming(
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            max_bytes: int,
+            timeout_seconds: int,
+            chunk_bytes: int = 1024 * 1024,
+        ) -> tuple[bytes, str | None, int]:
+            def _fetch() -> tuple[bytes, str | None, int]:
+                request = Request(url, headers=headers or {})
+                total = 0
+                parts: list[bytes] = []
+                with urlopen(request, timeout=timeout_seconds) as response:
+                    content_type = response.headers.get("Content-Type")
+                    while True:
+                        chunk = response.read(chunk_bytes)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise_limit_error(
+                                stage="download",
+                                limit_name="textbook_max_file_bytes",
+                                limit_value=max_bytes,
+                                actual_value=total,
+                            )
+                        parts.append(chunk)
+                return b"".join(parts), content_type, total
 
             return await asyncio.to_thread(_fetch)
 
@@ -5410,7 +5622,52 @@ class QdrantMCPServer(FastMCP):
                 progress["percent"] = None
             progress["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        def append_job_log(record: dict[str, Any], message: str) -> None:
+        def init_job_metrics(record: dict[str, Any]) -> dict[str, Any]:
+            metrics = record.get("metrics")
+            if isinstance(metrics, dict):
+                return metrics
+            metrics = {
+                "bytes_downloaded": 0,
+                "pages_extracted": 0,
+                "chars_extracted": 0,
+                "chunks_total": 0,
+                "chunks_embedded": 0,
+                "chunks_upserted": 0,
+                "stages": {},
+            }
+            record["metrics"] = metrics
+            return metrics
+
+        def set_job_metric(record: dict[str, Any], key: str, value: Any) -> None:
+            metrics = init_job_metrics(record)
+            metrics[key] = value
+
+        def increment_job_metric(
+            record: dict[str, Any], key: str, amount: int | float
+        ) -> None:
+            metrics = init_job_metrics(record)
+            current = metrics.get(key)
+            if not isinstance(current, (int, float)):
+                current = 0
+            metrics[key] = current + amount
+
+        def set_job_stage_duration(
+            record: dict[str, Any], stage: str, duration_ms: int
+        ) -> None:
+            metrics = init_job_metrics(record)
+            stages = metrics.get("stages")
+            if not isinstance(stages, dict):
+                stages = {}
+                metrics["stages"] = stages
+            stages[f"{stage}_ms"] = duration_ms
+
+        def append_job_log(
+            record: dict[str, Any],
+            message: str,
+            *,
+            stage: str | None = None,
+            event: str = "log",
+        ) -> None:
             logs = record.setdefault("logs", [])
             if not isinstance(logs, list):
                 logs = []
@@ -5418,6 +5675,9 @@ class QdrantMCPServer(FastMCP):
             logs.append(
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
+                    "job_id": record.get("job_id"),
+                    "stage": stage,
+                    "event": event,
                     "message": str(message),
                 }
             )
@@ -5432,8 +5692,10 @@ class QdrantMCPServer(FastMCP):
             async def debug(self, _message: str) -> None:
                 return None
 
-            def log(self, message: str) -> None:
-                append_job_log(self._record, message)
+            def log(
+                self, message: str, *, stage: str | None = None, event: str = "log"
+            ) -> None:
+                append_job_log(self._record, message, stage=stage, event=event)
 
             def set_phase(self, phase: str) -> None:
                 update_job_progress(self._record, phase=phase)
@@ -5444,6 +5706,499 @@ class QdrantMCPServer(FastMCP):
             def advance(self, count: int) -> None:
                 update_job_progress(self._record, advance=count)
 
+            def set_metric(self, key: str, value: Any) -> None:
+                set_job_metric(self._record, key, value)
+
+            def increment_metric(self, key: str, amount: int | float) -> None:
+                increment_job_metric(self._record, key, amount)
+
+            def set_stage_duration(self, stage: str, duration_ms: int) -> None:
+                set_job_stage_duration(self._record, stage, duration_ms)
+
+        async def ingest_textbook_job(
+            ctx: JobContext,
+            *,
+            collection_name: str,
+            source_url: str,
+            source_url_headers: dict[str, str] | None = None,
+            metadata: Metadata | None = None,
+            chapter_map: list[dict[str, Any]] | None = None,
+            chunk_size: int | None = None,
+            chunk_overlap: int | None = None,
+            return_chunk_ids: bool = False,
+            ocr: bool = True,
+        ) -> dict[str, Any]:
+            stage = "validate_input"
+            warnings: list[str] = []
+            chunk_ids: list[str] = []
+            replaced_existing = False
+            existing_doc_count = 0
+            existing_fingerprint_count = 0
+
+            def start_stage(next_stage: str) -> float:
+                nonlocal stage
+                stage = next_stage
+                ctx.set_phase(next_stage)
+                ctx.log(
+                    f"stage started: {next_stage}",
+                    stage=next_stage,
+                    event="stage_start",
+                )
+                return time.perf_counter()
+
+            def end_stage(current_stage: str, start_time: float) -> None:
+                duration_ms = int((time.perf_counter() - start_time) * 1000)
+                ctx.set_stage_duration(current_stage, duration_ms)
+                ctx.log(
+                    f"stage completed: {current_stage} ({duration_ms}ms)",
+                    stage=current_stage,
+                    event="stage_complete",
+                )
+
+            try:
+                async with asyncio.timeout(
+                    self.memory_settings.textbook_job_timeout_seconds
+                ):
+                    stage_start = start_stage("validate_input")
+                    try:
+                        normalized_metadata = normalize_textbook_metadata(metadata)
+                        try:
+                            resolved_chapter_map = normalize_chapter_map(chapter_map)
+                        except ValueError as exc:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="validate_input",
+                                message=str(exc),
+                            ) from exc
+
+                        parsed = urlparse(source_url or "")
+                        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="validate_input",
+                                message="source_url must be a valid http(s) URL.",
+                            )
+
+                        if chunk_size is None:
+                            resolved_chunk_size = min(
+                                self.memory_settings.max_text_length, 1500
+                            )
+                        else:
+                            resolved_chunk_size = chunk_size
+                        if resolved_chunk_size <= 0:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="validate_input",
+                                message="chunk_size must be positive.",
+                            )
+
+                        resolved_overlap = 200 if chunk_overlap is None else chunk_overlap
+                        if resolved_overlap < 0:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="validate_input",
+                                message="chunk_overlap must be >= 0.",
+                            )
+                        if resolved_overlap >= resolved_chunk_size:
+                            resolved_overlap = max(0, resolved_chunk_size - 1)
+                            warnings.append(
+                                "chunk_overlap reduced to chunk_size - 1 for textbook ingest."
+                            )
+
+                        resolved_collection = resolve_collection_name(collection_name)
+                        resolved_doc_id = build_textbook_doc_id(normalized_metadata)
+                    finally:
+                        end_stage("validate_input", stage_start)
+
+                    stage_start = start_stage("download")
+                    try:
+                        request_headers = {
+                            "User-Agent": "Mozilla/5.0 (compatible; mcp-server-qdrant)",
+                            "Accept": "*/*",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                        if source_url_headers:
+                            request_headers.update(
+                                {
+                                    str(key): str(value)
+                                    for key, value in source_url_headers.items()
+                                }
+                            )
+                        file_bytes, fetched_mime, bytes_downloaded = (
+                            await fetch_url_data_streaming(
+                                source_url,
+                                headers=request_headers,
+                                max_bytes=self.memory_settings.textbook_max_file_bytes,
+                                timeout_seconds=min(
+                                    120, self.memory_settings.textbook_job_timeout_seconds
+                                ),
+                            )
+                        )
+                        ctx.set_metric("bytes_downloaded", bytes_downloaded)
+                        inferred_file_name = Path(urlparse(source_url).path).name or "textbook.pdf"
+                        resolved_file_type = normalize_file_type(
+                            file_type=None,
+                            file_name=inferred_file_name,
+                            mime_type=fetched_mime,
+                            has_text=False,
+                        )
+                        if resolved_file_type != "pdf":
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="download",
+                                message="qdrant-ingest-textbook currently supports PDF source_url inputs only.",
+                            )
+                    finally:
+                        end_stage("download", stage_start)
+
+                    stage_start = start_stage("extract")
+                    try:
+                        extraction_result = await asyncio.to_thread(
+                            extract_document_sections,
+                            "pdf",
+                            text=None,
+                            data=file_bytes,
+                            ocr=ocr,
+                        )
+                        warnings.extend(extraction_result.warnings)
+                        page_count = extraction_result.page_count or 0
+                        ctx.set_metric("pages_extracted", page_count)
+                        if page_count > self.memory_settings.textbook_max_pages:
+                            raise_limit_error(
+                                stage="extract",
+                                limit_name="textbook_max_pages",
+                                limit_value=self.memory_settings.textbook_max_pages,
+                                actual_value=page_count,
+                            )
+                        if not extraction_result.sections:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="extract",
+                                message="No text could be extracted from the PDF.",
+                            )
+                    finally:
+                        end_stage("extract", stage_start)
+
+                    stage_start = start_stage("chunk")
+                    try:
+                        detected_markers = detect_pdf_chapter_markers(
+                            extraction_result.sections
+                        )
+                        chunk_specs: list[dict[str, Any]] = []
+                        extracted_chars = 0
+
+                        for section in extraction_result.sections:
+                            normalized_text = normalize_text_for_chunking(section.text)
+                            if not normalized_text:
+                                continue
+                            extracted_chars += len(normalized_text)
+                            chapter_num, chapter_title = resolve_chapter_metadata_for_page(
+                                section.page_start,
+                                chapter_map=resolved_chapter_map,
+                                detected_markers=detected_markers,
+                            )
+                            section_chunks = chunk_text_with_overlap(
+                                normalized_text,
+                                resolved_chunk_size,
+                                resolved_overlap,
+                            )
+                            for chunk in section_chunks:
+                                if not chunk:
+                                    continue
+                                chunk_specs.append(
+                                    {
+                                        "text": chunk,
+                                        "page_start": section.page_start,
+                                        "page_end": section.page_end,
+                                        "section_heading": section.section_heading,
+                                        "chapter": chapter_num,
+                                        "chapter_title": chapter_title,
+                                    }
+                                )
+
+                        ctx.set_metric("chars_extracted", extracted_chars)
+                        if (
+                            extracted_chars
+                            > self.memory_settings.textbook_max_extracted_chars
+                        ):
+                            raise_limit_error(
+                                stage="chunk",
+                                limit_name="textbook_max_extracted_chars",
+                                limit_value=self.memory_settings.textbook_max_extracted_chars,
+                                actual_value=extracted_chars,
+                            )
+
+                        chunk_count = len(chunk_specs)
+                        ctx.set_metric("chunks_total", chunk_count)
+                        if chunk_count == 0:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="chunk",
+                                message="No chunks were produced from extracted textbook text.",
+                            )
+                        if chunk_count > self.memory_settings.textbook_max_chunks:
+                            raise_limit_error(
+                                stage="chunk",
+                                limit_name="textbook_max_chunks",
+                                limit_value=self.memory_settings.textbook_max_chunks,
+                                actual_value=chunk_count,
+                            )
+                    finally:
+                        end_stage("chunk", stage_start)
+
+                    stage_start = start_stage("embed")
+                    try:
+                        doc_hash = hashlib.sha256(file_bytes).hexdigest()
+                        ingest_fingerprint = build_textbook_ingest_fingerprint(
+                            source_url=source_url,
+                            doc_hash=doc_hash,
+                            metadata=normalized_metadata,
+                        )
+
+                        base_metadata = dict(normalized_metadata)
+                        base_metadata.setdefault("type", "document")
+                        base_metadata.setdefault("source", "document")
+                        base_metadata.setdefault("scope", resolved_doc_id)
+                        base_metadata.setdefault("entities", [])
+                        base_metadata.setdefault("confidence", 0.5)
+                        base_metadata["doc_id"] = resolved_doc_id
+                        base_metadata["doc_title"] = normalized_metadata["title"]
+                        base_metadata["doc_hash"] = doc_hash
+                        base_metadata["file_type"] = "pdf"
+                        base_metadata["source_url"] = source_url
+                        base_metadata["file_name"] = (
+                            Path(urlparse(source_url).path).name or "textbook.pdf"
+                        )
+                        base_metadata["ingest_fingerprint"] = ingest_fingerprint
+
+                        parent_text_hash = compute_text_hash(
+                            "\n\n".join(spec["text"] for spec in chunk_specs)
+                        )
+
+                        entries: list[Entry] = []
+                        for index, spec in enumerate(chunk_specs):
+                            chunk_metadata = dict(base_metadata)
+                            chunk_metadata["chunk_index"] = index
+                            chunk_metadata["chunk_count"] = len(chunk_specs)
+                            chunk_metadata["parent_text_hash"] = parent_text_hash
+                            if spec.get("page_start") is not None:
+                                chunk_metadata["page_start"] = spec["page_start"]
+                            if spec.get("page_end") is not None:
+                                chunk_metadata["page_end"] = spec["page_end"]
+                            if spec.get("section_heading"):
+                                chunk_metadata["section_heading"] = spec["section_heading"]
+                            if spec.get("chapter") is not None:
+                                chunk_metadata["chapter"] = spec["chapter"]
+                            if spec.get("chapter_title"):
+                                chunk_metadata["chapter_title"] = spec["chapter_title"]
+
+                            records, record_warnings = normalize_memory_input(
+                                information=spec["text"],
+                                metadata=chunk_metadata,
+                                memory=None,
+                                embedding_info=self.embedding_info,
+                                strict=self.memory_settings.strict_params,
+                                max_text_length=max(
+                                    resolved_chunk_size, len(spec["text"])
+                                ),
+                            )
+                            warnings.extend(record_warnings)
+                            for record in records:
+                                entries.append(
+                                    Entry(content=record.text, metadata=record.metadata)
+                                )
+                        if len(entries) > self.memory_settings.textbook_max_chunks:
+                            raise_limit_error(
+                                stage="embed",
+                                limit_name="textbook_max_chunks",
+                                limit_value=self.memory_settings.textbook_max_chunks,
+                                actual_value=len(entries),
+                                message=(
+                                    "textbook_max_chunks exceeded after normalization "
+                                    "and memory-contract chunk expansion."
+                                ),
+                            )
+                        ctx.set_metric("chunks_total", len(entries))
+                    finally:
+                        end_stage("embed", stage_start)
+
+                    stage_start = start_stage("upsert")
+                    try:
+                        await self.qdrant_connector.ensure_collection_exists(
+                            resolved_collection
+                        )
+
+                        doc_id_key = f"{METADATA_PATH}.doc_id"
+                        fingerprint_key = f"{METADATA_PATH}.ingest_fingerprint"
+                        for key_name in (doc_id_key, fingerprint_key):
+                            try:
+                                await self.qdrant_connector.ensure_payload_indexes(
+                                    collection_name=resolved_collection,
+                                    indexes={
+                                        key_name: models.PayloadSchemaType.KEYWORD
+                                    },
+                                )
+                            except Exception as exc:
+                                warnings.append(
+                                    f"Unable to ensure payload index for {key_name}: {exc}"
+                                )
+
+                        doc_filter = models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key=doc_id_key,
+                                    match=models.MatchValue(value=resolved_doc_id),
+                                )
+                            ]
+                        )
+                        fingerprint_filter = models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key=doc_id_key,
+                                    match=models.MatchValue(value=resolved_doc_id),
+                                ),
+                                models.FieldCondition(
+                                    key=fingerprint_key,
+                                    match=models.MatchValue(value=ingest_fingerprint),
+                                ),
+                            ]
+                        )
+                        existing_doc_count = await self.qdrant_connector.count_points(
+                            collection_name=resolved_collection,
+                            query_filter=doc_filter,
+                        )
+                        existing_fingerprint_count = (
+                            await self.qdrant_connector.count_points(
+                                collection_name=resolved_collection,
+                                query_filter=fingerprint_filter,
+                            )
+                        )
+
+                        if existing_fingerprint_count >= len(entries):
+                            ctx.set_metric("chunks_upserted", 0)
+                            return {
+                                "status": "already_ingested",
+                                "collection_name": resolved_collection,
+                                "doc_id": resolved_doc_id,
+                                "doc_hash": doc_hash,
+                                "ingest_fingerprint": ingest_fingerprint,
+                                "source_url": source_url,
+                                "existing_count": existing_doc_count,
+                                "chunks_count": len(entries),
+                                "replaced_existing": False,
+                                "warnings": sorted(set(warnings)),
+                            }
+
+                        if existing_doc_count > 0:
+                            await self.qdrant_connector.delete_by_filter(
+                                doc_filter, collection_name=resolved_collection
+                            )
+                            replaced_existing = True
+
+                        vector_name = await self.qdrant_connector.resolve_vector_name(
+                            resolved_collection
+                        )
+
+                        ctx.set_total(len(entries))
+                        embed_batches = chunks_of(
+                            entries, self.memory_settings.textbook_embed_batch_size
+                        )
+                        semaphore = asyncio.Semaphore(
+                            self.memory_settings.textbook_max_concurrency
+                        )
+
+                        async def process_embed_batch(
+                            batch_entries: list[Entry],
+                        ) -> list[str]:
+                            async with semaphore:
+                                texts = [entry.content for entry in batch_entries]
+                                embeddings = await self.embedding_provider.embed_documents(
+                                    texts
+                                )
+                                points: list[models.PointStruct] = []
+                                point_ids: list[str] = []
+                                for entry, embedding in zip(batch_entries, embeddings):
+                                    point_id = uuid.uuid4().hex
+                                    point_ids.append(point_id)
+                                    payload = {
+                                        "document": entry.content,
+                                        METADATA_PATH: entry.metadata,
+                                    }
+                                    if vector_name is None:
+                                        vector_payload: list[float] | dict[str, list[float]] = (
+                                            embedding
+                                        )
+                                    else:
+                                        vector_payload = {vector_name: embedding}
+                                    points.append(
+                                        models.PointStruct(
+                                            id=point_id,
+                                            vector=vector_payload,
+                                            payload=payload,
+                                        )
+                                    )
+                                ctx.increment_metric("chunks_embedded", len(points))
+                                for point_batch in chunks_of(
+                                    points,
+                                    self.memory_settings.textbook_upsert_batch_size,
+                                ):
+                                    await self.qdrant_connector.upsert_points(
+                                        point_batch,
+                                        collection_name=resolved_collection,
+                                    )
+                                    ctx.increment_metric(
+                                        "chunks_upserted", len(point_batch)
+                                    )
+                                    ctx.advance(len(point_batch))
+                                return point_ids
+
+                        tasks = [
+                            asyncio.create_task(process_embed_batch(batch))
+                            for batch in embed_batches
+                        ]
+                        for done in asyncio.as_completed(tasks):
+                            chunk_ids.extend(await done)
+                    finally:
+                        end_stage("upsert", stage_start)
+
+                    stage_start = start_stage("finalize")
+                    try:
+                        result: dict[str, Any] = {
+                            "status": "ingested",
+                            "collection_name": resolved_collection,
+                            "doc_id": resolved_doc_id,
+                            "doc_hash": doc_hash,
+                            "ingest_fingerprint": ingest_fingerprint,
+                            "source_url": source_url,
+                            "chunks_count": len(entries),
+                            "existing_count": existing_doc_count,
+                            "existing_fingerprint_count": existing_fingerprint_count,
+                            "replaced_existing": replaced_existing,
+                            "warnings": sorted(set(warnings)),
+                        }
+                        if return_chunk_ids:
+                            result["chunk_ids"] = chunk_ids
+                        return result
+                    finally:
+                        end_stage("finalize", stage_start)
+            except TimeoutError as exc:
+                raise StructuredIngestError(
+                    error_code="textbook_ingest_timeout",
+                    suggested_http_status=422,
+                    stage=stage,
+                    message=(
+                        "Textbook ingest exceeded timeout "
+                        f"({self.memory_settings.textbook_job_timeout_seconds}s)."
+                    ),
+                ) from exc
+
         job_handlers: dict[str, Any] = {
             "audit-memories": audit_memories,
             "backfill-memory-contract": backfill_memory_contract,
@@ -5451,30 +6206,16 @@ class QdrantMCPServer(FastMCP):
             "dedupe-memories": dedupe_memories,
             "expire-memories": expire_memories,
             "find-near-duplicates": find_near_duplicates,
+            "ingest-textbook": ingest_textbook_job,
             "merge-duplicates": merge_duplicates,
             "reembed-points": reembed_points,
         }
 
-        async def submit_job(
-            ctx: Context,
-            job_type: Annotated[str, Field(description="Job type to run.")],
-            job_args: Annotated[
-                dict[str, Any] | None,
-                Field(description="Arguments for the job."),
-            ] = None,
-        ) -> dict[str, Any]:
-            state = new_request(
-                ctx,
-                {"job_type": job_type, "job_args": job_args},
-            )
-            job_key = job_type.strip()
-            if job_key.startswith("qdrant-"):
-                job_key = job_key[len("qdrant-") :]
+        def submit_background_job(job_key: str, args: dict[str, Any]) -> dict[str, Any]:
             handler = job_handlers.get(job_key)
             if handler is None:
-                raise ValueError(f"Unknown job_type '{job_type}'.")
+                raise ValueError(f"Unknown job_type '{job_key}'.")
 
-            args = dict(job_args or {})
             if "collection_name" not in args:
                 default_collection = self._get_default_collection_name()
                 if default_collection:
@@ -5492,31 +6233,287 @@ class QdrantMCPServer(FastMCP):
                 "error": None,
             }
             init_job_progress(record)
-            append_job_log(record, f"queued job_type={job_key}")
+            init_job_metrics(record)
+            append_job_log(
+                record,
+                f"queued job_type={job_key}",
+                stage="queued",
+                event="queued",
+            )
             self._jobs[job_id] = record
 
             async def run_job() -> None:
                 record["status"] = "running"
                 record["started_at"] = datetime.now(timezone.utc).isoformat()
                 update_job_progress(record, phase="running")
-                append_job_log(record, f"started job_type={job_key}")
+                append_job_log(
+                    record,
+                    f"started job_type={job_key}",
+                    stage="running",
+                    event="started",
+                )
                 job_ctx = JobContext(job_id, record)
                 try:
                     result = await handler(job_ctx, **args)
                     record["status"] = "completed"
                     record["result"] = result
                     update_job_progress(record, phase="completed")
-                    append_job_log(record, f"completed job_type={job_key}")
+                    append_job_log(
+                        record,
+                        f"completed job_type={job_key}",
+                        stage="completed",
+                        event="completed",
+                    )
+                except StructuredIngestError as exc:
+                    record["status"] = "failed"
+                    record["error"] = exc.message
+                    record["structured_error"] = exc.to_dict()
+                    update_job_progress(record, phase="failed")
+                    append_job_log(
+                        record,
+                        f"failed job_type={job_key}: {exc.message}",
+                        stage=exc.stage,
+                        event="failed",
+                    )
                 except Exception as exc:  # pragma: no cover - runtime safety
                     record["status"] = "failed"
                     record["error"] = str(exc)
+                    record["structured_error"] = build_structured_error_payload(
+                        error_code="internal_error",
+                        suggested_http_status=422,
+                        stage="runtime",
+                        message=str(exc),
+                    )
                     update_job_progress(record, phase="failed")
-                    append_job_log(record, f"failed job_type={job_key}: {exc}")
+                    append_job_log(
+                        record,
+                        f"failed job_type={job_key}: {exc}",
+                        stage="runtime",
+                        event="failed",
+                    )
                 record["finished_at"] = datetime.now(timezone.utc).isoformat()
 
             task = asyncio.create_task(run_job())
             self._job_tasks[job_id] = task
-            data = {"job_id": job_id, "status": "queued"}
+            return {"job_id": job_id, "status": "queued", "job_type": job_key}
+
+        async def submit_job(
+            ctx: Context,
+            job_type: Annotated[str, Field(description="Job type to run.")],
+            job_args: Annotated[
+                dict[str, Any] | None,
+                Field(description="Arguments for the job."),
+            ] = None,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {"job_type": job_type, "job_args": job_args},
+            )
+            job_key = job_type.strip()
+            if job_key.startswith("qdrant-"):
+                job_key = job_key[len("qdrant-") :]
+            args = dict(job_args or {})
+            data = submit_background_job(job_key, args)
+            return finish_request(state, data)
+
+        async def ingest_textbook(
+            ctx: Context,
+            collection_name: Annotated[
+                str, Field(description="The collection to store the textbook in.")
+            ],
+            source_url: Annotated[
+                str, Field(description="HTTP(S) URL to the textbook PDF.")
+            ],
+            metadata: Annotated[
+                Metadata | None,
+                Field(
+                    description=(
+                        "Required metadata keys: class, material_type, title, author, "
+                        "edition, isbn. Optional: publisher, chapter, chapter_title."
+                    )
+                ),
+            ] = None,
+            source_url_headers: Annotated[
+                dict[str, str] | None,
+                Field(description="Optional request headers used while downloading."),
+            ] = None,
+            chapter_map: Annotated[
+                list[dict[str, Any]] | None,
+                Field(
+                    description=(
+                        "Optional chapter overrides with start_page/end_page/chapter/chapter_title."
+                    )
+                ),
+            ] = None,
+            chunk_size: Annotated[
+                int | None,
+                Field(description="Chunk size in characters (defaults to 1500)."),
+            ] = None,
+            chunk_overlap: Annotated[
+                int | None,
+                Field(description="Chunk overlap in characters (defaults to 200)."),
+            ] = None,
+            return_chunk_ids: Annotated[
+                bool,
+                Field(description="Include chunk point ids in job result."),
+            ] = False,
+            ocr: Annotated[
+                bool,
+                Field(description="Enable OCR for textbook PDF extraction."),
+            ] = True,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "collection_name": collection_name,
+                    "source_url": source_url,
+                    "metadata": metadata,
+                    "source_url_headers": (
+                        list(source_url_headers.keys()) if source_url_headers else None
+                    ),
+                    "chapter_map": chapter_map,
+                    "chunk_size": chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                    "return_chunk_ids": return_chunk_ids,
+                    "ocr": ocr,
+                },
+            )
+            ensure_mutations_allowed()
+
+            try:
+                normalized_metadata = normalize_textbook_metadata(metadata)
+                parsed = urlparse(source_url or "")
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    raise StructuredIngestError(
+                        error_code="textbook_validation_error",
+                        suggested_http_status=422,
+                        stage="validate_input",
+                        message="source_url must be a valid http(s) URL.",
+                    )
+                normalized_chapter_map = normalize_chapter_map(chapter_map)
+                if chunk_size is not None and chunk_size <= 0:
+                    raise StructuredIngestError(
+                        error_code="textbook_validation_error",
+                        suggested_http_status=422,
+                        stage="validate_input",
+                        message="chunk_size must be positive.",
+                    )
+                if chunk_overlap is not None and chunk_overlap < 0:
+                    raise StructuredIngestError(
+                        error_code="textbook_validation_error",
+                        suggested_http_status=422,
+                        stage="validate_input",
+                        message="chunk_overlap must be >= 0.",
+                    )
+
+                job_args: dict[str, Any] = {
+                    "collection_name": collection_name,
+                    "source_url": source_url,
+                    "source_url_headers": source_url_headers or {},
+                    "metadata": normalized_metadata,
+                    "chapter_map": normalized_chapter_map,
+                    "chunk_size": chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                    "return_chunk_ids": return_chunk_ids,
+                    "ocr": ocr,
+                }
+                data = submit_background_job("ingest-textbook", job_args)
+                data["doc_id"] = build_textbook_doc_id(normalized_metadata)
+                return finish_request(state, data)
+            except StructuredIngestError as exc:
+                data = {"status": "rejected", "error": exc.to_dict()}
+                return finish_request(state, data)
+            except ValueError as exc:
+                structured = build_structured_error_payload(
+                    error_code="textbook_validation_error",
+                    suggested_http_status=422,
+                    stage="validate_input",
+                    message=str(exc),
+                )
+                data = {"status": "rejected", "error": structured}
+                return finish_request(state, data)
+
+        async def get_ingest_status(
+            ctx: Context,
+            job_id: Annotated[str, Field(description="Textbook ingest job id.")],
+            include_logs: Annotated[
+                bool, Field(description="Include job logs in the response.")
+            ] = False,
+            logs_tail: Annotated[
+                int, Field(description="Max log lines when include_logs=true.")
+            ] = 50,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "job_id": job_id,
+                    "include_logs": include_logs,
+                    "logs_tail": logs_tail,
+                },
+            )
+            record = self._jobs.get(job_id)
+            if not record:
+                raise ValueError(f"Job {job_id} not found.")
+            if record.get("job_type") != "ingest-textbook":
+                raise ValueError(
+                    f"Job {job_id} is type '{record.get('job_type')}', not ingest-textbook."
+                )
+            logs = record.get("logs") or []
+            if include_logs:
+                logs = logs[-max(logs_tail, 0) :] if logs_tail else []
+            else:
+                logs = []
+            data = {
+                "job_id": job_id,
+                "job_type": record.get("job_type"),
+                "status": record.get("status"),
+                "created_at": record.get("created_at"),
+                "started_at": record.get("started_at"),
+                "finished_at": record.get("finished_at"),
+                "error": record.get("error"),
+                "structured_error": record.get("structured_error"),
+                "progress": record.get("progress") or {},
+                "metrics": record.get("metrics") or {},
+                "result": record.get("result")
+                if record.get("status") == "completed"
+                else None,
+                "logs": logs,
+                "server_instance_id": SERVER_INSTANCE_ID,
+                "server_uptime_ms": int((time.monotonic() - SERVER_START) * 1000),
+            }
+            return finish_request(state, data)
+
+        async def cancel_ingest(
+            ctx: Context,
+            job_id: Annotated[str, Field(description="Textbook ingest job id.")],
+        ) -> dict[str, Any]:
+            state = new_request(ctx, {"job_id": job_id})
+            task = self._job_tasks.get(job_id)
+            record = self._jobs.get(job_id)
+            if record is None:
+                raise ValueError(f"Job {job_id} not found.")
+            if record.get("job_type") != "ingest-textbook":
+                raise ValueError(
+                    f"Job {job_id} is type '{record.get('job_type')}', not ingest-textbook."
+                )
+            if task is None or task.done():
+                data = {
+                    "job_id": job_id,
+                    "status": record.get("status"),
+                    "cancelled": False,
+                }
+                return finish_request(state, data)
+            task.cancel()
+            record["status"] = "cancelled"
+            record["finished_at"] = datetime.now(timezone.utc).isoformat()
+            update_job_progress(record, phase="cancelled")
+            append_job_log(
+                record,
+                "cancelled job_type=ingest-textbook",
+                stage="cancelled",
+                event="cancelled",
+            )
+            data = {"job_id": job_id, "status": "cancelled", "cancelled": True}
             return finish_request(state, data)
 
         async def job_status(
@@ -5589,6 +6586,7 @@ class QdrantMCPServer(FastMCP):
                     "job_id": job_id,
                     "status": record.get("status"),
                     "error": record.get("error"),
+                    "structured_error": record.get("structured_error"),
                 }
                 return finish_request(state, data)
             data = {
@@ -5812,6 +6810,24 @@ class QdrantMCPServer(FastMCP):
             submit_job,
             name="qdrant-submit-job",
             description="Submit a long-running housekeeping job.",
+        )
+        self.tool(
+            ingest_textbook,
+            name="qdrant-ingest-textbook",
+            description=(
+                "Submit an asynchronous textbook PDF ingest job from source_url. "
+                "Returns immediately with a job_id."
+            ),
+        )
+        self.tool(
+            get_ingest_status,
+            name="qdrant-get-ingest-status",
+            description="Get status, progress, metrics, and structured errors for a textbook ingest job.",
+        )
+        self.tool(
+            cancel_ingest,
+            name="qdrant-cancel-ingest",
+            description="Cancel a running textbook ingest job.",
         )
         self.tool(
             job_status,

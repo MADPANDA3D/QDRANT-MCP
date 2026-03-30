@@ -49,9 +49,19 @@ OPTIONAL_FIELDS = {
     "doc_id",
     "doc_title",
     "doc_hash",
+    "ingest_fingerprint",
     "source_url",
     "file_name",
     "file_type",
+    "class",
+    "material_type",
+    "title",
+    "author",
+    "edition",
+    "isbn",
+    "publisher",
+    "chapter",
+    "chapter_title",
     "page_start",
     "page_end",
     "section_heading",
@@ -74,6 +84,16 @@ FILTER_FIELDS = {
     "source",
     "doc_id",
     "doc_title",
+    "class",
+    "material_type",
+    "title",
+    "author",
+    "edition",
+    "isbn",
+    "publisher",
+    "chapter",
+    "chapter_title",
+    "ingest_fingerprint",
     "source_url",
     "file_name",
     "file_type",
@@ -607,6 +627,16 @@ def build_memory_filter(
     add_match("text_hash", raw.get("text_hash"))
     add_match("doc_id", raw.get("doc_id"))
     add_match("doc_title", raw.get("doc_title"))
+    add_match("class", raw.get("class"))
+    add_match("material_type", raw.get("material_type"))
+    add_match("title", raw.get("title"))
+    add_match("author", raw.get("author"))
+    add_match("edition", raw.get("edition"))
+    add_match("isbn", raw.get("isbn"))
+    add_match("publisher", raw.get("publisher"))
+    add_match("chapter", raw.get("chapter"))
+    add_match("chapter_title", raw.get("chapter_title"))
+    add_match("ingest_fingerprint", raw.get("ingest_fingerprint"))
     add_match("source_url", raw.get("source_url"))
     add_match("file_name", raw.get("file_name"))
     add_match("file_type", raw.get("file_type"))

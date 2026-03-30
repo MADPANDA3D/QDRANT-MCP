@@ -38,6 +38,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         "qdrant-promote-short-term",
         "qdrant-ingest-with-validation",
         "qdrant-ingest-document",
+        "qdrant-ingest-textbook",
         "qdrant-ensure-payload-indexes",
         "qdrant-backfill-memory-contract",
         "qdrant-update-point",
@@ -58,6 +59,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
         "qdrant-restore-snapshot",
         "qdrant-submit-job",
         "qdrant-cancel-job",
+        "qdrant-cancel-ingest",
     }
     _EMBEDDING_REQUIRED_READ_TOOLS = {
         "qdrant-find",

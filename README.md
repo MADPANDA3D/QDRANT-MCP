@@ -143,6 +143,9 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 - `qdrant-ingest-document`: chunk a document and store as multiple points.
   - PDF ingestion runs native text extraction plus OCR by default (`ocr=true`).
   - OCR is local (Tesseract via `pytesseract` + `pdf2image`), not a third-party API.
+- `qdrant-ingest-textbook`: submit an async textbook PDF ingestion job (source_url-only).
+  - Returns immediately with `job_id` for large-file workflows.
+  - Requires metadata: `class`, `material_type`, `title`, `author`, `edition`, `isbn`.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
 - `qdrant-recommend-memories`: recommend memories using positive/negative examples.
@@ -178,6 +181,8 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 <summary>Jobs + Progress</summary>
 
 - `qdrant-submit-job`: start a background maintenance job.
+- `qdrant-get-ingest-status`: ingest-focused status/metrics for textbook jobs.
+- `qdrant-cancel-ingest`: cancel a running textbook ingest job.
 - `qdrant-job-status`: get job status and summary.
 - `qdrant-job-progress`: read progress counters and phase.
 - `qdrant-job-logs`: tail recent logs for a job.
@@ -240,6 +245,14 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_MAX_POINT_IDS`           | Max point id list size                                              | `500`                                                             |
 | `MCP_STRICT_PARAMS`           | Reject unknown keys/filters and oversized text                      | `false`                                                           |
 | `MCP_MAX_TEXT_LENGTH`         | Max text length before chunking                                     | `8000`                                                            |
+| `MCP_TEXTBOOK_MAX_FILE_BYTES` | Max textbook file size (bytes) for async ingest                     | `104857600`                                                       |
+| `MCP_TEXTBOOK_MAX_PAGES`      | Max textbook page count for async ingest                            | `1000`                                                            |
+| `MCP_TEXTBOOK_MAX_EXTRACTED_CHARS` | Max extracted characters for async textbook ingest           | `3000000`                                                         |
+| `MCP_TEXTBOOK_MAX_CHUNKS`     | Max chunk count for async textbook ingest                           | `20000`                                                           |
+| `MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS` | Timeout for async textbook ingest jobs                          | `2700`                                                            |
+| `MCP_TEXTBOOK_EMBED_BATCH_SIZE` | Embed batch size for textbook jobs                               | `64`                                                              |
+| `MCP_TEXTBOOK_UPSERT_BATCH_SIZE` | Upsert batch size for textbook jobs                              | `128`                                                             |
+| `MCP_TEXTBOOK_MAX_CONCURRENCY` | Max concurrent textbook embed/upsert workers                       | `4`                                                               |
 | `MCP_DEDUPE_ACTION`           | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
 | `MCP_INGEST_VALIDATION_MODE`  | Validation mode (`allow`, `reject`, `quarantine`)                   | `allow`                                                           |
 | `MCP_QUARANTINE_COLLECTION`   | Collection name for quarantined memories                            | `jarvis-quarantine`                                               |

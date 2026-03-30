@@ -307,3 +307,55 @@ class MemorySettings(BaseSettings):
         default=7,
         validation_alias="MCP_SHORT_TERM_TTL_DAYS",
     )
+    textbook_max_file_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        validation_alias="MCP_TEXTBOOK_MAX_FILE_BYTES",
+    )
+    textbook_max_pages: int = Field(
+        default=1000,
+        validation_alias="MCP_TEXTBOOK_MAX_PAGES",
+    )
+    textbook_max_extracted_chars: int = Field(
+        default=3_000_000,
+        validation_alias="MCP_TEXTBOOK_MAX_EXTRACTED_CHARS",
+    )
+    textbook_max_chunks: int = Field(
+        default=20_000,
+        validation_alias="MCP_TEXTBOOK_MAX_CHUNKS",
+    )
+    textbook_job_timeout_seconds: int = Field(
+        default=45 * 60,
+        validation_alias="MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS",
+    )
+    textbook_embed_batch_size: int = Field(
+        default=64,
+        validation_alias="MCP_TEXTBOOK_EMBED_BATCH_SIZE",
+    )
+    textbook_upsert_batch_size: int = Field(
+        default=128,
+        validation_alias="MCP_TEXTBOOK_UPSERT_BATCH_SIZE",
+    )
+    textbook_max_concurrency: int = Field(
+        default=4,
+        validation_alias="MCP_TEXTBOOK_MAX_CONCURRENCY",
+    )
+
+    @model_validator(mode="after")
+    def validate_positive_limits(self) -> "MemorySettings":
+        positive_fields = (
+            "max_text_length",
+            "short_term_ttl_days",
+            "textbook_max_file_bytes",
+            "textbook_max_pages",
+            "textbook_max_extracted_chars",
+            "textbook_max_chunks",
+            "textbook_job_timeout_seconds",
+            "textbook_embed_batch_size",
+            "textbook_upsert_batch_size",
+            "textbook_max_concurrency",
+        )
+        for field_name in positive_fields:
+            value = getattr(self, field_name)
+            if value <= 0:
+                raise ValueError(f"{field_name} must be positive.")
+        return self

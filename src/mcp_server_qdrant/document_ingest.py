@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,10 @@ class ExtractionResult:
 
 
 _MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+_CHAPTER_HEADING_RE = re.compile(
+    r"\bchapter\s+(\d{1,3})(?:\s*[:.\-]\s*([^\n\r]{1,200}))?",
+    flags=re.IGNORECASE,
+)
 
 
 def chunk_text_with_overlap(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -60,6 +65,114 @@ def chunk_text_with_overlap(text: str, chunk_size: int, overlap: int) -> list[st
         start = next_start
 
     return chunks or [text[:chunk_size]]
+
+
+def normalize_text_for_chunking(text: str) -> str:
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
+
+
+def normalize_chapter_map(
+    chapter_map: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if not chapter_map:
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for idx, item in enumerate(chapter_map):
+        if not isinstance(item, dict):
+            raise ValueError(f"chapter_map[{idx}] must be an object.")
+
+        start_page = item.get("start_page")
+        end_page = item.get("end_page")
+        chapter = item.get("chapter")
+        chapter_title = item.get("chapter_title")
+
+        if not isinstance(start_page, int) or start_page <= 0:
+            raise ValueError(f"chapter_map[{idx}].start_page must be a positive integer.")
+        if end_page is not None and (
+            not isinstance(end_page, int) or end_page < start_page
+        ):
+            raise ValueError(
+                f"chapter_map[{idx}].end_page must be >= start_page when provided."
+            )
+        if chapter is not None and (not isinstance(chapter, int) or chapter <= 0):
+            raise ValueError(f"chapter_map[{idx}].chapter must be a positive integer.")
+        if chapter_title is not None and not isinstance(chapter_title, str):
+            raise ValueError(f"chapter_map[{idx}].chapter_title must be a string.")
+
+        normalized.append(
+            {
+                "start_page": start_page,
+                "end_page": end_page,
+                "chapter": chapter,
+                "chapter_title": chapter_title.strip() if chapter_title else None,
+            }
+        )
+
+    normalized.sort(key=lambda entry: entry["start_page"])
+    return normalized
+
+
+def detect_pdf_chapter_markers(sections: list[DocumentSection]) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    seen_pages: set[int] = set()
+    for section in sections:
+        if section.page_start is None or section.page_start in seen_pages:
+            continue
+        seen_pages.add(section.page_start)
+        preview = section.text[:600]
+        match = _CHAPTER_HEADING_RE.search(preview)
+        if not match:
+            continue
+        chapter_number = int(match.group(1))
+        title = match.group(2).strip() if match.group(2) else None
+        markers.append(
+            {
+                "start_page": section.page_start,
+                "chapter": chapter_number,
+                "chapter_title": title,
+            }
+        )
+
+    markers.sort(key=lambda entry: entry["start_page"])
+    return markers
+
+
+def resolve_chapter_metadata_for_page(
+    page: int | None,
+    *,
+    chapter_map: list[dict[str, Any]] | None = None,
+    detected_markers: list[dict[str, Any]] | None = None,
+) -> tuple[int | None, str | None]:
+    if page is None:
+        return None, None
+
+    if chapter_map:
+        for item in chapter_map:
+            start_page = item["start_page"]
+            end_page = item.get("end_page")
+            if page < start_page:
+                continue
+            if end_page is not None and page > end_page:
+                continue
+            return item.get("chapter"), item.get("chapter_title")
+
+    if detected_markers:
+        selected: dict[str, Any] | None = None
+        for marker in detected_markers:
+            if page >= marker["start_page"]:
+                selected = marker
+            else:
+                break
+        if selected:
+            return selected.get("chapter"), selected.get("chapter_title")
+
+    return None, None
 
 
 def decode_bytes_to_text(data: bytes) -> tuple[str, list[str]]:

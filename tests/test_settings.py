@@ -146,6 +146,14 @@ class TestMemorySettings:
         assert settings.quarantine_collection == "jarvis-quarantine"
         assert settings.short_term_collection == "jarvis-short-term"
         assert settings.short_term_ttl_days == 7
+        assert settings.textbook_max_file_bytes == 100 * 1024 * 1024
+        assert settings.textbook_max_pages == 1000
+        assert settings.textbook_max_extracted_chars == 3_000_000
+        assert settings.textbook_max_chunks == 20_000
+        assert settings.textbook_job_timeout_seconds == 45 * 60
+        assert settings.textbook_embed_batch_size == 64
+        assert settings.textbook_upsert_batch_size == 128
+        assert settings.textbook_max_concurrency == 4
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("MCP_STRICT_PARAMS", "1")
@@ -156,6 +164,14 @@ class TestMemorySettings:
         monkeypatch.setenv("MCP_QUARANTINE_COLLECTION", "jarvis-quarantine-dev")
         monkeypatch.setenv("MCP_SHORT_TERM_COLLECTION", "jarvis-short-term-dev")
         monkeypatch.setenv("MCP_SHORT_TERM_TTL_DAYS", "3")
+        monkeypatch.setenv("MCP_TEXTBOOK_MAX_FILE_BYTES", "1048576")
+        monkeypatch.setenv("MCP_TEXTBOOK_MAX_PAGES", "250")
+        monkeypatch.setenv("MCP_TEXTBOOK_MAX_EXTRACTED_CHARS", "250000")
+        monkeypatch.setenv("MCP_TEXTBOOK_MAX_CHUNKS", "1800")
+        monkeypatch.setenv("MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS", "600")
+        monkeypatch.setenv("MCP_TEXTBOOK_EMBED_BATCH_SIZE", "32")
+        monkeypatch.setenv("MCP_TEXTBOOK_UPSERT_BATCH_SIZE", "48")
+        monkeypatch.setenv("MCP_TEXTBOOK_MAX_CONCURRENCY", "2")
         settings = MemorySettings()
         assert settings.strict_params is True
         assert settings.max_text_length == 2048
@@ -165,3 +181,16 @@ class TestMemorySettings:
         assert settings.quarantine_collection == "jarvis-quarantine-dev"
         assert settings.short_term_collection == "jarvis-short-term-dev"
         assert settings.short_term_ttl_days == 3
+        assert settings.textbook_max_file_bytes == 1_048_576
+        assert settings.textbook_max_pages == 250
+        assert settings.textbook_max_extracted_chars == 250_000
+        assert settings.textbook_max_chunks == 1800
+        assert settings.textbook_job_timeout_seconds == 600
+        assert settings.textbook_embed_batch_size == 32
+        assert settings.textbook_upsert_batch_size == 48
+        assert settings.textbook_max_concurrency == 2
+
+    def test_invalid_textbook_limits(self, monkeypatch):
+        monkeypatch.setenv("MCP_TEXTBOOK_MAX_FILE_BYTES", "0")
+        with pytest.raises(ValueError):
+            MemorySettings()
