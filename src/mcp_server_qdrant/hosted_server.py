@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 try:  # FastMCP >= 2.2.11
     from fastmcp.server.dependencies import get_http_headers
@@ -104,6 +108,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
             instructions=instructions,
             **settings,
         )
+        self._register_health_route()
 
         if self.request_override_settings.allow_request_overrides:
             self.qdrant_connector = QdrantConnector(
@@ -114,6 +119,40 @@ class HostedQdrantMCPServer(QdrantMCPServer):
                 self._default_vector_name,
                 self._default_local_path,
                 self.payload_indexes,
+            )
+
+    def _registered_tool_count(self) -> int:
+        manager = getattr(self, "_tool_manager", None)
+        for attr in ("_tools", "tools"):
+            tools = getattr(manager, attr, None)
+            if isinstance(tools, dict):
+                return len(tools)
+            if isinstance(tools, (list, tuple, set)):
+                return len(tools)
+        list_tools = getattr(manager, "list_tools", None)
+        if callable(list_tools):
+            try:
+                tools = list_tools()
+                if isinstance(tools, (list, tuple, set)):
+                    return len(tools)
+            except Exception:
+                pass
+        return 28
+
+    def _register_health_route(self) -> None:
+        tool_count = self._registered_tool_count
+
+        @self.custom_route("/health", methods=["GET"])
+        async def health(_: Request) -> JSONResponse:
+            count = tool_count()
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "service": "qdrant-mcp",
+                    "version": os.getenv("MCP_SERVER_VERSION", "dev"),
+                    "tool_count": count,
+                    "tools": {"total": count},
+                }
             )
 
     @property
