@@ -2,10 +2,13 @@ import pytest
 
 from mcp_server_qdrant.document_ingest import (
     DocumentSection,
+    compute_ocr_page_budget,
     detect_pdf_chapter_markers,
     normalize_chapter_map,
     normalize_text_for_chunking,
     resolve_chapter_metadata_for_page,
+    select_ocr_candidate_pages,
+    summarize_pdf_text_coverage,
 )
 
 
@@ -80,3 +83,41 @@ def test_chapter_map_overrides_detected_markers():
     )
     assert chapter == 7
     assert title == "Override"
+
+
+def test_coverage_summary_counts_low_text_pages():
+    page_texts = [
+        "This page has enough text to be considered extracted.",
+        "",
+        "tiny",
+        "Another page with healthy text output.",
+    ]
+    summary = summarize_pdf_text_coverage(page_texts, low_text_threshold_chars=10)
+    assert summary["total_pages"] == 4
+    assert summary["good_pages"] == 2
+    assert summary["low_text_pages"] == [1, 2]
+    assert summary["coverage_ratio"] == 0.5
+
+
+def test_compute_ocr_budget_respects_ratio_and_cap():
+    budget = compute_ocr_page_budget(434, ocr_max_pages=120, ocr_max_page_ratio=0.30)
+    assert budget == 120
+
+    tiny_budget = compute_ocr_page_budget(3, ocr_max_pages=120, ocr_max_page_ratio=0.30)
+    assert tiny_budget == 1
+
+
+def test_select_ocr_candidates_prefers_lowest_text_pages():
+    page_texts = [
+        "text-rich page with enough characters",
+        "x",
+        "",
+        "short",
+        "another good page with enough characters",
+    ]
+    candidates = select_ocr_candidate_pages(
+        page_texts,
+        low_text_threshold_chars=8,
+        budget_pages=2,
+    )
+    assert candidates == [2, 1]

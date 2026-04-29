@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import os
 import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -24,6 +26,15 @@ class ExtractionResult:
     page_count: int | None = None
     warnings: list[str] = field(default_factory=list)
     title_hint: str | None = None
+    coverage_ratio: float | None = None
+    coverage_pages_total: int | None = None
+    coverage_pages_meeting_threshold: int | None = None
+    ocr_low_text_threshold_chars: int | None = None
+    ocr_min_coverage_ratio: float | None = None
+    ocr_budget_pages: int | None = None
+    ocr_attempted_pages: int = 0
+    low_text_pages_before_ocr: int | None = None
+    low_text_pages_after_ocr: int | None = None
 
 
 _MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -188,6 +199,62 @@ def decode_bytes_to_text(data: bytes) -> tuple[str, list[str]]:
         return decoded, warnings
 
 
+def count_text_chars(text: str) -> int:
+    return len((text or "").strip())
+
+
+def summarize_pdf_text_coverage(
+    page_texts: list[str], low_text_threshold_chars: int
+) -> dict[str, Any]:
+    threshold = max(0, low_text_threshold_chars)
+    total_pages = len(page_texts)
+    low_text_pages = [
+        index
+        for index, text in enumerate(page_texts)
+        if count_text_chars(text) < threshold
+    ]
+    good_pages = total_pages - len(low_text_pages)
+    coverage_ratio = (good_pages / total_pages) if total_pages > 0 else 0.0
+    return {
+        "total_pages": total_pages,
+        "good_pages": good_pages,
+        "low_text_pages": low_text_pages,
+        "coverage_ratio": coverage_ratio,
+    }
+
+
+def compute_ocr_page_budget(
+    total_pages: int,
+    *,
+    ocr_max_pages: int,
+    ocr_max_page_ratio: float,
+) -> int:
+    if total_pages <= 0:
+        return 0
+    max_pages = max(0, ocr_max_pages)
+    ratio = max(0.0, ocr_max_page_ratio)
+    ratio_budget = math.ceil(total_pages * ratio)
+    if ratio > 0 and ratio_budget == 0:
+        ratio_budget = 1
+    return max(0, min(max_pages, ratio_budget))
+
+
+def select_ocr_candidate_pages(
+    page_texts: list[str],
+    *,
+    low_text_threshold_chars: int,
+    budget_pages: int,
+) -> list[int]:
+    if budget_pages <= 0:
+        return []
+    summary = summarize_pdf_text_coverage(page_texts, low_text_threshold_chars)
+    low_pages = summary["low_text_pages"]
+    ranked_pages = sorted(
+        low_pages, key=lambda index: count_text_chars(page_texts[index])
+    )
+    return ranked_pages[:budget_pages]
+
+
 def extract_plain_text(text: str) -> ExtractionResult:
     cleaned = text.strip()
     return ExtractionResult(
@@ -280,19 +347,30 @@ def _extract_docx_sections_sync(data: bytes) -> ExtractionResult:
     return ExtractionResult(sections=sections, title_hint=title_hint)
 
 
-def _extract_pdf_text_with_pdftotext(data: bytes) -> tuple[str, list[str]]:
+def _extract_pdf_text_with_pdftotext(
+    data: bytes | None = None,
+    *,
+    pdf_path: str | Path | None = None,
+) -> tuple[str, list[str]]:
     warnings: list[str] = []
-    pdf_path = None
+    temp_pdf_path = None
+    pdf_input_path: str | None = None
     txt_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as pdf_file:
-            pdf_file.write(data)
-            pdf_file.flush()
-            pdf_path = pdf_file.name
+        if pdf_path is not None:
+            pdf_input_path = str(pdf_path)
+        else:
+            if data is None:
+                raise ValueError("PDF extraction requires either data or pdf_path.")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as pdf_file:
+                pdf_file.write(data)
+                pdf_file.flush()
+                temp_pdf_path = pdf_file.name
+                pdf_input_path = temp_pdf_path
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as txt_file:
             txt_path = txt_file.name
         result = subprocess.run(
-            ["pdftotext", "-layout", "-enc", "UTF-8", pdf_path, txt_path],
+            ["pdftotext", "-layout", "-enc", "UTF-8", pdf_input_path, txt_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
@@ -301,9 +379,9 @@ def _extract_pdf_text_with_pdftotext(data: bytes) -> tuple[str, list[str]]:
         warnings.append("pdftotext is required for PDF fallback extraction.")
         return "", warnings
     finally:
-        if pdf_path and os.path.exists(pdf_path):
+        if temp_pdf_path and os.path.exists(temp_pdf_path):
             try:
-                os.unlink(pdf_path)
+                os.unlink(temp_pdf_path)
             except OSError:
                 warnings.append("Failed to remove temporary PDF file.")
 
@@ -334,19 +412,34 @@ def _extract_pdf_text_with_pdftotext(data: bytes) -> tuple[str, list[str]]:
     return text, warnings
 
 
-def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
+def _extract_pdf_sections_sync(
+    data: bytes | None = None,
+    *,
+    file_path: str | Path | None = None,
+    ocr: bool,
+    ocr_low_text_threshold_chars: int = 120,
+    ocr_min_coverage_ratio: float = 0.85,
+    ocr_max_pages: int = 120,
+    ocr_max_page_ratio: float = 0.30,
+) -> ExtractionResult:
     try:
         from pypdf import PdfReader  # type: ignore
     except ImportError as exc:  # pragma: no cover - dependency missing
         raise RuntimeError("pypdf is required for .pdf files.") from exc
 
+    if data is None and file_path is None:
+        raise ValueError("PDF extraction requires either data or file_path.")
+
     page_texts: list[str] = []
-    empty_pages: list[int] = []
     warnings: list[str] = []
     page_count: int | None = None
+    pdf_input_path: str | None = str(file_path) if file_path is not None else None
 
     try:
-        reader = PdfReader(io.BytesIO(data), strict=False)
+        if pdf_input_path is not None:
+            reader = PdfReader(pdf_input_path, strict=False)
+        else:
+            reader = PdfReader(io.BytesIO(data or b""), strict=False)
         page_count = len(reader.pages)
     except Exception as exc:  # pragma: no cover - PDF parsing errors vary
         warnings.append(f"pypdf failed to read PDF: {exc}")
@@ -359,8 +452,6 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
             except Exception as exc:  # pragma: no cover - PDF parsing errors vary
                 warnings.append(f"PDF text extraction failed for page {idx + 1}: {exc}")
                 text = ""
-            if not text.strip():
-                empty_pages.append(idx)
             page_texts.append(text)
 
     def _merge_text(primary_text: str, ocr_text: str) -> str:
@@ -376,36 +467,95 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
             return ocr_clean
         return f"{primary}\n\n{ocr_clean}"
 
+    coverage_target_ratio = max(0.0, min(1.0, ocr_min_coverage_ratio))
+    coverage_before = summarize_pdf_text_coverage(
+        page_texts, ocr_low_text_threshold_chars
+    )
+    low_text_pages_before_ocr = len(coverage_before["low_text_pages"])
+    low_text_pages_after_ocr = low_text_pages_before_ocr
+    ocr_budget_pages = 0
+    ocr_attempted_pages = 0
+
     if ocr:
         try:
             import pytesseract  # type: ignore
-            from pdf2image import convert_from_bytes  # type: ignore
+            from pdf2image import convert_from_bytes, convert_from_path  # type: ignore
         except ImportError:  # pragma: no cover - optional dependency missing
             warnings.append("OCR requested but pdf2image/pytesseract not installed.")
         else:
             try:
-                images = convert_from_bytes(data)
-                if reader is None:
-                    page_count = len(images)
-                    page_texts = ["" for _ in range(len(images))]
-                elif len(images) != len(page_texts):
-                    warnings.append(
-                        "OCR page count differs from text extraction page count; "
-                        "processing shared page range."
+                ocr_budget_pages = compute_ocr_page_budget(
+                    len(page_texts),
+                    ocr_max_pages=ocr_max_pages,
+                    ocr_max_page_ratio=ocr_max_page_ratio,
+                )
+                if (
+                    coverage_before["coverage_ratio"] < coverage_target_ratio
+                    and ocr_budget_pages > 0
+                ):
+                    ocr_pages = select_ocr_candidate_pages(
+                        page_texts,
+                        low_text_threshold_chars=ocr_low_text_threshold_chars,
+                        budget_pages=ocr_budget_pages,
                     )
-
-                target_len = min(len(images), len(page_texts))
-                for idx in range(target_len):
-                    if idx < len(images):
-                        ocr_text = pytesseract.image_to_string(images[idx])
-                        if ocr_text.strip():
-                            page_texts[idx] = _merge_text(page_texts[idx], ocr_text)
-                        elif not page_texts[idx].strip():
-                            warnings.append(f"OCR produced no text for page {idx + 1}.")
-                    else:
-                        warnings.append(f"OCR image missing for page {idx + 1}.")
+                    for page_index in ocr_pages:
+                        ocr_attempted_pages += 1
+                        images: list[Any] = []
+                        try:
+                            page_number = page_index + 1
+                            if pdf_input_path is not None:
+                                images = convert_from_path(
+                                    pdf_input_path,
+                                    first_page=page_number,
+                                    last_page=page_number,
+                                )
+                            else:
+                                images = convert_from_bytes(
+                                    data or b"",
+                                    first_page=page_number,
+                                    last_page=page_number,
+                                )
+                            if not images:
+                                warnings.append(
+                                    f"OCR conversion produced no image for page {page_number}."
+                                )
+                                continue
+                            ocr_text = pytesseract.image_to_string(images[0])
+                            if ocr_text.strip():
+                                page_texts[page_index] = _merge_text(
+                                    page_texts[page_index], ocr_text
+                                )
+                            elif not page_texts[page_index].strip():
+                                warnings.append(
+                                    f"OCR produced no text for page {page_number}."
+                                )
+                        finally:
+                            for image in images:
+                                close = getattr(image, "close", None)
+                                if callable(close):
+                                    close()
+                    coverage_after_ocr = summarize_pdf_text_coverage(
+                        page_texts, ocr_low_text_threshold_chars
+                    )
+                    low_text_pages_after_ocr = len(coverage_after_ocr["low_text_pages"])
+                    if coverage_after_ocr["coverage_ratio"] < coverage_target_ratio:
+                        warnings.append(
+                            "OCR coverage target not met within configured OCR budget. "
+                            f"coverage={coverage_after_ocr['coverage_ratio']:.3f}, "
+                            f"target={coverage_target_ratio:.3f}, "
+                            f"budget={ocr_budget_pages}, attempted={ocr_attempted_pages}."
+                        )
+                elif coverage_before["coverage_ratio"] < coverage_target_ratio:
+                    warnings.append(
+                        "OCR was enabled but no OCR budget was available under current limits."
+                    )
             except Exception as exc:  # pragma: no cover - OCR errors vary
                 warnings.append(f"OCR failed: {exc}")
+
+    coverage_after = summarize_pdf_text_coverage(
+        page_texts, ocr_low_text_threshold_chars
+    )
+    low_text_pages_after_ocr = len(coverage_after["low_text_pages"])
 
     sections: list[DocumentSection] = []
     for idx, text in enumerate(page_texts):
@@ -422,7 +572,9 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
         )
 
     if not sections:
-        fallback_text, fallback_warnings = _extract_pdf_text_with_pdftotext(data)
+        fallback_text, fallback_warnings = _extract_pdf_text_with_pdftotext(
+            data, pdf_path=pdf_input_path
+        )
         warnings.extend(fallback_warnings)
         cleaned_fallback = fallback_text.strip()
         if cleaned_fallback:
@@ -432,8 +584,19 @@ def _extract_pdf_sections_sync(data: bytes, *, ocr: bool) -> ExtractionResult:
 
     return ExtractionResult(
         sections=sections,
-        page_count=page_count,
+        page_count=page_count or len(page_texts),
         warnings=warnings,
+        coverage_ratio=coverage_after["coverage_ratio"]
+        if coverage_after["total_pages"] > 0
+        else None,
+        coverage_pages_total=coverage_after["total_pages"],
+        coverage_pages_meeting_threshold=coverage_after["good_pages"],
+        ocr_low_text_threshold_chars=max(0, ocr_low_text_threshold_chars),
+        ocr_min_coverage_ratio=coverage_target_ratio,
+        ocr_budget_pages=ocr_budget_pages,
+        ocr_attempted_pages=ocr_attempted_pages,
+        low_text_pages_before_ocr=low_text_pages_before_ocr,
+        low_text_pages_after_ocr=low_text_pages_after_ocr,
     )
 
 
@@ -557,7 +720,12 @@ def extract_document_sections(
     *,
     text: str | None = None,
     data: bytes | None = None,
+    file_path: str | Path | None = None,
     ocr: bool = False,
+    ocr_low_text_threshold_chars: int = 120,
+    ocr_min_coverage_ratio: float = 0.85,
+    ocr_max_pages: int = 120,
+    ocr_max_page_ratio: float = 0.30,
 ) -> ExtractionResult:
     if file_type in {"txt", "text"}:
         if text is None and data is not None:
@@ -593,8 +761,16 @@ def extract_document_sections(
         return _extract_doc_sections_sync(data)
 
     if file_type == "pdf":
-        if data is None:
-            raise ValueError(".pdf ingestion requires binary data.")
-        return _extract_pdf_sections_sync(data, ocr=ocr)
+        if data is None and file_path is None:
+            raise ValueError(".pdf ingestion requires binary data or file_path.")
+        return _extract_pdf_sections_sync(
+            data,
+            file_path=file_path,
+            ocr=ocr,
+            ocr_low_text_threshold_chars=ocr_low_text_threshold_chars,
+            ocr_min_coverage_ratio=ocr_min_coverage_ratio,
+            ocr_max_pages=ocr_max_pages,
+            ocr_max_page_ratio=ocr_max_page_ratio,
+        )
 
     raise ValueError(f"Unsupported file_type: {file_type}")

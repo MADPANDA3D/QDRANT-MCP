@@ -4,12 +4,13 @@ import hashlib
 import json
 import logging
 import math
+import tempfile
 import time
 import uuid
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -1248,6 +1249,53 @@ class QdrantMCPServer(FastMCP):
                             )
                         parts.append(chunk)
                 return b"".join(parts), content_type, total
+
+            return await asyncio.to_thread(_fetch)
+
+        async def fetch_url_to_tempfile_streaming(
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            max_bytes: int,
+            timeout_seconds: int,
+            suffix: str = ".pdf",
+            chunk_bytes: int = 1024 * 1024,
+        ) -> tuple[Path, str | None, int, str]:
+            def _fetch() -> tuple[Path, str | None, int, str]:
+                request = Request(url, headers=headers or {})
+                total = 0
+                content_type: str | None = None
+                hasher = hashlib.sha256()
+                temp_path_obj: Path | None = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=suffix
+                    ) as temp_file:
+                        temp_path_obj = Path(temp_file.name)
+                        with urlopen(request, timeout=timeout_seconds) as response:
+                            content_type = response.headers.get("Content-Type")
+                            while True:
+                                chunk = response.read(chunk_bytes)
+                                if not chunk:
+                                    break
+                                total += len(chunk)
+                                if total > max_bytes:
+                                    raise_limit_error(
+                                        stage="download",
+                                        limit_name="textbook_max_file_bytes",
+                                        limit_value=max_bytes,
+                                        actual_value=total,
+                                    )
+                                temp_file.write(chunk)
+                                hasher.update(chunk)
+                        temp_file.flush()
+                except Exception:
+                    if temp_path_obj and temp_path_obj.exists():
+                        temp_path_obj.unlink(missing_ok=True)
+                    raise
+                if temp_path_obj is None:
+                    raise RuntimeError("Failed to create temporary download file.")
+                return temp_path_obj, content_type, total, hasher.hexdigest()
 
             return await asyncio.to_thread(_fetch)
 
@@ -5621,6 +5669,76 @@ class QdrantMCPServer(FastMCP):
                 },
             )
 
+        job_store_dir = Path(self.memory_settings.textbook_job_state_dir)
+        job_store_enabled = True
+        try:
+            job_store_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            job_store_enabled = False
+            logger.warning(
+                "Failed to initialize textbook job store directory '%s': %s",
+                job_store_dir,
+                exc,
+            )
+
+        job_state_retention_delta = timedelta(
+            hours=self.memory_settings.textbook_job_state_retention_hours
+        )
+
+        def parse_iso_datetime(value: Any) -> datetime | None:
+            if not value:
+                return None
+            try:
+                parsed = datetime.fromisoformat(str(value))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+
+        def is_terminal_status(status: Any) -> bool:
+            return str(status) in {"completed", "failed", "cancelled"}
+
+        def job_record_path(job_id: str) -> Path:
+            return job_store_dir / f"{job_id}.json"
+
+        def persist_job_record(record: dict[str, Any]) -> None:
+            if not job_store_enabled:
+                return
+            job_id = str(record.get("job_id") or "").strip()
+            if not job_id:
+                return
+            path = job_record_path(job_id)
+            tmp_path = path.with_suffix(".json.tmp")
+            try:
+                payload = json.dumps(record, default=str, ensure_ascii=False)
+                tmp_path.write_text(payload, encoding="utf-8")
+                tmp_path.replace(path)
+            except Exception as exc:
+                logger.warning("Failed to persist job record '%s': %s", job_id, exc)
+                tmp_path.unlink(missing_ok=True)
+
+        def prune_job_store() -> None:
+            if not job_store_enabled:
+                return
+            now = datetime.now(timezone.utc)
+            for path in job_store_dir.glob("*.json"):
+                try:
+                    parsed = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                if not is_terminal_status(parsed.get("status")):
+                    continue
+                finished_at = parse_iso_datetime(parsed.get("finished_at"))
+                created_at = parse_iso_datetime(parsed.get("created_at"))
+                reference_time = finished_at or created_at
+                if reference_time is None:
+                    continue
+                if now - reference_time > job_state_retention_delta:
+                    path.unlink(missing_ok=True)
+
         def init_job_progress(record: dict[str, Any]) -> dict[str, Any]:
             progress = record.get("progress")
             if isinstance(progress, dict):
@@ -5660,6 +5778,7 @@ class QdrantMCPServer(FastMCP):
             else:
                 progress["percent"] = None
             progress["updated_at"] = datetime.now(timezone.utc).isoformat()
+            persist_job_record(record)
 
         def init_job_metrics(record: dict[str, Any]) -> dict[str, Any]:
             metrics = record.get("metrics")
@@ -5680,6 +5799,7 @@ class QdrantMCPServer(FastMCP):
         def set_job_metric(record: dict[str, Any], key: str, value: Any) -> None:
             metrics = init_job_metrics(record)
             metrics[key] = value
+            persist_job_record(record)
 
         def increment_job_metric(
             record: dict[str, Any], key: str, amount: int | float
@@ -5689,6 +5809,7 @@ class QdrantMCPServer(FastMCP):
             if not isinstance(current, (int, float)):
                 current = 0
             metrics[key] = current + amount
+            persist_job_record(record)
 
         def set_job_stage_duration(
             record: dict[str, Any], stage: str, duration_ms: int
@@ -5699,6 +5820,7 @@ class QdrantMCPServer(FastMCP):
                 stages = {}
                 metrics["stages"] = stages
             stages[f"{stage}_ms"] = duration_ms
+            persist_job_record(record)
 
         def append_job_log(
             record: dict[str, Any],
@@ -5722,6 +5844,57 @@ class QdrantMCPServer(FastMCP):
             )
             if len(logs) > JOB_LOG_LIMIT:
                 del logs[: len(logs) - JOB_LOG_LIMIT]
+            persist_job_record(record)
+
+        def hydrate_jobs_from_store() -> None:
+            if not job_store_enabled:
+                return
+            now_iso = datetime.now(timezone.utc).isoformat()
+            prune_job_store()
+            for path in job_store_dir.glob("*.json"):
+                try:
+                    parsed = json.loads(path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read persisted job file '%s': %s", path, exc
+                    )
+                    continue
+                if not isinstance(parsed, dict):
+                    continue
+                job_id = str(parsed.get("job_id") or "").strip()
+                if not job_id:
+                    continue
+                parsed["job_id"] = job_id
+                init_job_progress(parsed)
+                init_job_metrics(parsed)
+                if str(parsed.get("status")) in {"queued", "running"}:
+                    progress = parsed.get("progress") or {}
+                    stage = (
+                        str(progress.get("phase"))
+                        if isinstance(progress, dict) and progress.get("phase")
+                        else "runtime"
+                    )
+                    message = "Job was interrupted by server restart before completion."
+                    parsed["status"] = "failed"
+                    parsed["error"] = message
+                    parsed["structured_error"] = build_structured_error_payload(
+                        error_code="server_restarted",
+                        suggested_http_status=422,
+                        stage=stage,
+                        message=message,
+                    )
+                    parsed["finished_at"] = now_iso
+                    update_job_progress(parsed, phase="failed")
+                    append_job_log(
+                        parsed,
+                        "job marked failed after server restart",
+                        stage=stage,
+                        event="server_restarted",
+                    )
+                self._jobs[job_id] = parsed
+                persist_job_record(parsed)
+
+        hydrate_jobs_from_store()
 
         class JobContext:
             def __init__(self, request_id: str, record: dict[str, Any]):
@@ -5769,10 +5942,18 @@ class QdrantMCPServer(FastMCP):
         ) -> dict[str, Any]:
             stage = "validate_input"
             warnings: list[str] = []
-            chunk_ids: list[str] = []
+            chunk_ids: list[str] = [] if return_chunk_ids else []
             replaced_existing = False
             existing_doc_count = 0
             existing_fingerprint_count = 0
+            downloaded_pdf_path: Path | None = None
+            doc_hash = ""
+            ingest_fingerprint = ""
+            chunk_count = 0
+            parent_text_hash = ""
+            inferred_file_name = "textbook.pdf"
+            base_metadata: dict[str, Any] = {}
+            detected_markers: list[dict[str, Any]] = []
 
             def start_stage(next_stage: str) -> float:
                 nonlocal stage
@@ -5870,16 +6051,18 @@ class QdrantMCPServer(FastMCP):
                                 }
                             )
                         (
-                            file_bytes,
+                            downloaded_pdf_path,
                             fetched_mime,
                             bytes_downloaded,
-                        ) = await fetch_url_data_streaming(
+                            doc_hash,
+                        ) = await fetch_url_to_tempfile_streaming(
                             source_url,
                             headers=request_headers,
                             max_bytes=self.memory_settings.textbook_max_file_bytes,
                             timeout_seconds=min(
                                 120, self.memory_settings.textbook_job_timeout_seconds
                             ),
+                            suffix=".pdf",
                         )
                         ctx.set_metric("bytes_downloaded", bytes_downloaded)
                         inferred_file_name = (
@@ -5907,18 +6090,63 @@ class QdrantMCPServer(FastMCP):
                             extract_document_sections,
                             "pdf",
                             text=None,
-                            data=file_bytes,
+                            data=None,
+                            file_path=downloaded_pdf_path,
                             ocr=ocr,
+                            ocr_low_text_threshold_chars=self.memory_settings.textbook_ocr_low_text_threshold_chars,
+                            ocr_min_coverage_ratio=self.memory_settings.textbook_ocr_min_coverage_ratio,
+                            ocr_max_pages=self.memory_settings.textbook_ocr_max_pages,
+                            ocr_max_page_ratio=self.memory_settings.textbook_ocr_max_page_ratio,
                         )
                         warnings.extend(extraction_result.warnings)
                         page_count = extraction_result.page_count or 0
                         ctx.set_metric("pages_extracted", page_count)
+                        ctx.set_metric(
+                            "coverage_ratio",
+                            extraction_result.coverage_ratio,
+                        )
+                        ctx.set_metric(
+                            "coverage_pages_total",
+                            extraction_result.coverage_pages_total,
+                        )
+                        ctx.set_metric(
+                            "coverage_pages_meeting_threshold",
+                            extraction_result.coverage_pages_meeting_threshold,
+                        )
+                        ctx.set_metric(
+                            "ocr_attempted_pages",
+                            extraction_result.ocr_attempted_pages,
+                        )
+                        ctx.set_metric(
+                            "ocr_budget_pages",
+                            extraction_result.ocr_budget_pages,
+                        )
                         if page_count > self.memory_settings.textbook_max_pages:
                             raise_limit_error(
                                 stage="extract",
                                 limit_name="textbook_max_pages",
                                 limit_value=self.memory_settings.textbook_max_pages,
                                 actual_value=page_count,
+                            )
+                        if (
+                            ocr
+                            and page_count > 0
+                            and extraction_result.coverage_ratio is not None
+                            and extraction_result.coverage_ratio
+                            < self.memory_settings.textbook_ocr_min_coverage_ratio
+                        ):
+                            raise StructuredIngestError(
+                                error_code="textbook_ocr_coverage_unmet",
+                                suggested_http_status=422,
+                                stage="extract",
+                                message=(
+                                    "OCR coverage target not met within OCR budget. "
+                                    f"coverage={extraction_result.coverage_ratio:.3f}, "
+                                    f"target={self.memory_settings.textbook_ocr_min_coverage_ratio:.3f}, "
+                                    f"budget={extraction_result.ocr_budget_pages}, "
+                                    f"attempted={extraction_result.ocr_attempted_pages}. "
+                                    "Retry with chapter-scoped ingest or a smaller source file."
+                                ),
                             )
                         if not extraction_result.sections:
                             raise StructuredIngestError(
@@ -5935,21 +6163,16 @@ class QdrantMCPServer(FastMCP):
                         detected_markers = detect_pdf_chapter_markers(
                             extraction_result.sections
                         )
-                        chunk_specs: list[dict[str, Any]] = []
                         extracted_chars = 0
+                        parent_text_hasher = hashlib.sha256()
+                        parent_hash_has_content = False
+                        chunk_count = 0
 
                         for section in extraction_result.sections:
                             normalized_text = normalize_text_for_chunking(section.text)
                             if not normalized_text:
                                 continue
                             extracted_chars += len(normalized_text)
-                            chapter_num, chapter_title = (
-                                resolve_chapter_metadata_for_page(
-                                    section.page_start,
-                                    chapter_map=resolved_chapter_map,
-                                    detected_markers=detected_markers,
-                                )
-                            )
                             section_chunks = chunk_text_with_overlap(
                                 normalized_text,
                                 resolved_chunk_size,
@@ -5958,16 +6181,11 @@ class QdrantMCPServer(FastMCP):
                             for chunk in section_chunks:
                                 if not chunk:
                                     continue
-                                chunk_specs.append(
-                                    {
-                                        "text": chunk,
-                                        "page_start": section.page_start,
-                                        "page_end": section.page_end,
-                                        "section_heading": section.section_heading,
-                                        "chapter": chapter_num,
-                                        "chapter_title": chapter_title,
-                                    }
-                                )
+                                if parent_hash_has_content:
+                                    parent_text_hasher.update(b"\n\n")
+                                parent_text_hasher.update(chunk.encode("utf-8"))
+                                parent_hash_has_content = True
+                                chunk_count += 1
 
                         ctx.set_metric("chars_extracted", extracted_chars)
                         if (
@@ -5981,7 +6199,6 @@ class QdrantMCPServer(FastMCP):
                                 actual_value=extracted_chars,
                             )
 
-                        chunk_count = len(chunk_specs)
                         ctx.set_metric("chunks_total", chunk_count)
                         if chunk_count == 0:
                             raise StructuredIngestError(
@@ -5997,12 +6214,12 @@ class QdrantMCPServer(FastMCP):
                                 limit_value=self.memory_settings.textbook_max_chunks,
                                 actual_value=chunk_count,
                             )
+                        parent_text_hash = parent_text_hasher.hexdigest()
                     finally:
                         end_stage("chunk", stage_start)
 
                     stage_start = start_stage("embed")
                     try:
-                        doc_hash = hashlib.sha256(file_bytes).hexdigest()
                         ingest_fingerprint = build_textbook_ingest_fingerprint(
                             source_url=source_url,
                             doc_hash=doc_hash,
@@ -6020,61 +6237,9 @@ class QdrantMCPServer(FastMCP):
                         base_metadata["doc_hash"] = doc_hash
                         base_metadata["file_type"] = "pdf"
                         base_metadata["source_url"] = source_url
-                        base_metadata["file_name"] = (
-                            Path(urlparse(source_url).path).name or "textbook.pdf"
-                        )
+                        base_metadata["file_name"] = inferred_file_name
                         base_metadata["ingest_fingerprint"] = ingest_fingerprint
-
-                        parent_text_hash = compute_text_hash(
-                            "\n\n".join(spec["text"] for spec in chunk_specs)
-                        )
-
-                        entries: list[Entry] = []
-                        for index, spec in enumerate(chunk_specs):
-                            chunk_metadata = dict(base_metadata)
-                            chunk_metadata["chunk_index"] = index
-                            chunk_metadata["chunk_count"] = len(chunk_specs)
-                            chunk_metadata["parent_text_hash"] = parent_text_hash
-                            if spec.get("page_start") is not None:
-                                chunk_metadata["page_start"] = spec["page_start"]
-                            if spec.get("page_end") is not None:
-                                chunk_metadata["page_end"] = spec["page_end"]
-                            if spec.get("section_heading"):
-                                chunk_metadata["section_heading"] = spec[
-                                    "section_heading"
-                                ]
-                            if spec.get("chapter") is not None:
-                                chunk_metadata["chapter"] = spec["chapter"]
-                            if spec.get("chapter_title"):
-                                chunk_metadata["chapter_title"] = spec["chapter_title"]
-
-                            records, record_warnings = normalize_memory_input(
-                                information=spec["text"],
-                                metadata=chunk_metadata,
-                                memory=None,
-                                embedding_info=self.embedding_info,
-                                strict=self.memory_settings.strict_params,
-                                max_text_length=max(
-                                    resolved_chunk_size, len(spec["text"])
-                                ),
-                            )
-                            warnings.extend(record_warnings)
-                            for record in records:
-                                entries.append(
-                                    Entry(content=record.text, metadata=record.metadata)
-                                )
-                        if len(entries) > self.memory_settings.textbook_max_chunks:
-                            raise_limit_error(
-                                stage="embed",
-                                limit_name="textbook_max_chunks",
-                                limit_value=self.memory_settings.textbook_max_chunks,
-                                actual_value=len(entries),
-                                message=(
-                                    "textbook_max_chunks exceeded after normalization "
-                                    "and memory-contract chunk expansion."
-                                ),
-                            )
-                        ctx.set_metric("chunks_total", len(entries))
+                        ctx.set_metric("chunks_total", chunk_count)
                     finally:
                         end_stage("embed", stage_start)
 
@@ -6130,7 +6295,7 @@ class QdrantMCPServer(FastMCP):
                             )
                         )
 
-                        if existing_fingerprint_count >= len(entries):
+                        if existing_fingerprint_count >= chunk_count:
                             ctx.set_metric("chunks_upserted", 0)
                             return {
                                 "status": "already_ingested",
@@ -6140,7 +6305,7 @@ class QdrantMCPServer(FastMCP):
                                 "ingest_fingerprint": ingest_fingerprint,
                                 "source_url": source_url,
                                 "existing_count": existing_doc_count,
-                                "chunks_count": len(entries),
+                                "chunks_count": chunk_count,
                                 "replaced_existing": False,
                                 "warnings": sorted(set(warnings)),
                             }
@@ -6155,13 +6320,14 @@ class QdrantMCPServer(FastMCP):
                             resolved_collection
                         )
 
-                        ctx.set_total(len(entries))
-                        embed_batches = chunks_of(
-                            entries, self.memory_settings.textbook_embed_batch_size
-                        )
+                        ctx.set_total(chunk_count)
                         semaphore = asyncio.Semaphore(
-                            self.memory_settings.textbook_max_concurrency
+                            max(1, self.memory_settings.textbook_max_concurrency)
                         )
+                        max_inflight = max(
+                            1, self.memory_settings.textbook_max_concurrency
+                        )
+                        effective_chunk_total = chunk_count
 
                         async def process_embed_batch(
                             batch_entries: list[Entry],
@@ -6172,10 +6338,11 @@ class QdrantMCPServer(FastMCP):
                                     await self.embedding_provider.embed_documents(texts)
                                 )
                                 points: list[models.PointStruct] = []
-                                point_ids: list[str] = []
+                                point_ids: list[str] = [] if return_chunk_ids else []
                                 for entry, embedding in zip(batch_entries, embeddings):
                                     point_id = uuid.uuid4().hex
-                                    point_ids.append(point_id)
+                                    if return_chunk_ids:
+                                        point_ids.append(point_id)
                                     payload = {
                                         "document": entry.content,
                                         METADATA_PATH: entry.metadata,
@@ -6208,12 +6375,136 @@ class QdrantMCPServer(FastMCP):
                                     ctx.advance(len(point_batch))
                                 return point_ids
 
-                        tasks = [
-                            asyncio.create_task(process_embed_batch(batch))
-                            for batch in embed_batches
-                        ]
-                        for done in asyncio.as_completed(tasks):
-                            chunk_ids.extend(await done)
+                        inflight: set[asyncio.Task[list[str]]] = set()
+                        pending_entries: list[Entry] = []
+                        chunk_index = 0
+                        normalized_chunk_total = 0
+
+                        async def drain_inflight(*, wait_all: bool) -> None:
+                            nonlocal inflight
+                            if not inflight:
+                                return
+                            done, pending = await asyncio.wait(
+                                inflight,
+                                return_when=(
+                                    asyncio.ALL_COMPLETED
+                                    if wait_all
+                                    else asyncio.FIRST_COMPLETED
+                                ),
+                            )
+                            inflight = set(pending)
+                            for task in done:
+                                point_ids = await task
+                                if return_chunk_ids:
+                                    chunk_ids.extend(point_ids)
+
+                        async def submit_pending_entries() -> None:
+                            nonlocal pending_entries
+                            if not pending_entries:
+                                return
+                            batch = pending_entries
+                            pending_entries = []
+                            inflight.add(
+                                asyncio.create_task(process_embed_batch(batch))
+                            )
+                            if len(inflight) >= max_inflight:
+                                await drain_inflight(wait_all=False)
+
+                        for section in extraction_result.sections:
+                            normalized_text = normalize_text_for_chunking(section.text)
+                            if not normalized_text:
+                                continue
+                            chapter_num, chapter_title = (
+                                resolve_chapter_metadata_for_page(
+                                    section.page_start,
+                                    chapter_map=resolved_chapter_map,
+                                    detected_markers=detected_markers,
+                                )
+                            )
+                            section_chunks = chunk_text_with_overlap(
+                                normalized_text,
+                                resolved_chunk_size,
+                                resolved_overlap,
+                            )
+                            for chunk in section_chunks:
+                                if not chunk:
+                                    continue
+                                chunk_metadata = dict(base_metadata)
+                                chunk_metadata["chunk_index"] = chunk_index
+                                chunk_metadata["chunk_count"] = chunk_count
+                                chunk_metadata["parent_text_hash"] = parent_text_hash
+                                if section.page_start is not None:
+                                    chunk_metadata["page_start"] = section.page_start
+                                if section.page_end is not None:
+                                    chunk_metadata["page_end"] = section.page_end
+                                if section.section_heading:
+                                    chunk_metadata["section_heading"] = (
+                                        section.section_heading
+                                    )
+                                if chapter_num is not None:
+                                    chunk_metadata["chapter"] = chapter_num
+                                if chapter_title:
+                                    chunk_metadata["chapter_title"] = chapter_title
+
+                                records, record_warnings = normalize_memory_input(
+                                    information=chunk,
+                                    metadata=chunk_metadata,
+                                    memory=None,
+                                    embedding_info=self.embedding_info,
+                                    strict=self.memory_settings.strict_params,
+                                    max_text_length=max(
+                                        resolved_chunk_size, len(chunk)
+                                    ),
+                                )
+                                warnings.extend(record_warnings)
+                                for record in records:
+                                    normalized_chunk_total += 1
+                                    if (
+                                        normalized_chunk_total
+                                        > self.memory_settings.textbook_max_chunks
+                                    ):
+                                        raise_limit_error(
+                                            stage="upsert",
+                                            limit_name="textbook_max_chunks",
+                                            limit_value=self.memory_settings.textbook_max_chunks,
+                                            actual_value=normalized_chunk_total,
+                                            message=(
+                                                "textbook_max_chunks exceeded after normalization "
+                                                "and memory-contract chunk expansion."
+                                            ),
+                                        )
+                                    pending_entries.append(
+                                        Entry(
+                                            content=record.text,
+                                            metadata=record.metadata,
+                                        )
+                                    )
+                                if normalized_chunk_total > effective_chunk_total:
+                                    effective_chunk_total = normalized_chunk_total
+                                    ctx.set_total(effective_chunk_total)
+                                    ctx.set_metric(
+                                        "chunks_total", effective_chunk_total
+                                    )
+                                if (
+                                    len(pending_entries)
+                                    >= self.memory_settings.textbook_embed_batch_size
+                                ):
+                                    await submit_pending_entries()
+                                chunk_index += 1
+
+                        if normalized_chunk_total == 0:
+                            raise StructuredIngestError(
+                                error_code="textbook_validation_error",
+                                suggested_http_status=422,
+                                stage="upsert",
+                                message="No chunks remained after normalization.",
+                            )
+                        await submit_pending_entries()
+                        await drain_inflight(wait_all=True)
+                        if normalized_chunk_total > 0:
+                            chunk_count = normalized_chunk_total
+                            ctx.set_metric("chunks_total", chunk_count)
+                            ctx.set_total(chunk_count)
                     finally:
                         end_stage("upsert", stage_start)
 
@@ -6226,7 +6517,7 @@ class QdrantMCPServer(FastMCP):
                             "doc_hash": doc_hash,
                             "ingest_fingerprint": ingest_fingerprint,
                             "source_url": source_url,
-                            "chunks_count": len(entries),
+                            "chunks_count": chunk_count,
                             "existing_count": existing_doc_count,
                             "existing_fingerprint_count": existing_fingerprint_count,
                             "replaced_existing": replaced_existing,
@@ -6247,6 +6538,9 @@ class QdrantMCPServer(FastMCP):
                         f"({self.memory_settings.textbook_job_timeout_seconds}s)."
                     ),
                 ) from exc
+            finally:
+                if downloaded_pdf_path and downloaded_pdf_path.exists():
+                    downloaded_pdf_path.unlink(missing_ok=True)
 
         job_handlers: dict[str, Any] = {
             "audit-memories": audit_memories,
@@ -6290,6 +6584,7 @@ class QdrantMCPServer(FastMCP):
                 event="queued",
             )
             self._jobs[job_id] = record
+            persist_job_record(record)
 
             async def run_job() -> None:
                 record["status"] = "running"
@@ -6341,6 +6636,8 @@ class QdrantMCPServer(FastMCP):
                         event="failed",
                     )
                 record["finished_at"] = datetime.now(timezone.utc).isoformat()
+                persist_job_record(record)
+                prune_job_store()
 
             task = asyncio.create_task(run_job())
             self._job_tasks[job_id] = task
@@ -6562,6 +6859,7 @@ class QdrantMCPServer(FastMCP):
                 stage="cancelled",
                 event="cancelled",
             )
+            prune_job_store()
             data = {"job_id": job_id, "status": "cancelled", "cancelled": True}
             return finish_request(state, data)
 

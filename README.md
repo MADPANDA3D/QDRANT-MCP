@@ -146,6 +146,9 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 - `qdrant-ingest-textbook`: submit an async textbook PDF ingestion job (source_url-only).
   - Returns immediately with `job_id` for large-file workflows.
   - Requires metadata: `class`, `material_type`, `title`, `author`, `edition`, `isbn`.
+  - Uses streaming download + page-wise extraction to reduce memory pressure.
+  - With `ocr=true`, applies OCR coverage-gating (blank/low-text pages first) and fails fast if target coverage cannot be met within budget.
+  - Job status is persisted on disk so restart scenarios return structured failure instead of `Job not found`.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
 - `qdrant-recommend-memories`: recommend memories using positive/negative examples.
@@ -250,10 +253,16 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_TEXTBOOK_MAX_PAGES`      | Max textbook page count for async ingest                            | `1000`                                                            |
 | `MCP_TEXTBOOK_MAX_EXTRACTED_CHARS` | Max extracted characters for async textbook ingest           | `3000000`                                                         |
 | `MCP_TEXTBOOK_MAX_CHUNKS`     | Max chunk count for async textbook ingest                           | `20000`                                                           |
+| `MCP_TEXTBOOK_OCR_LOW_TEXT_THRESHOLD_CHARS` | Chars/page threshold considered low-text during OCR gating | `120`                                                             |
+| `MCP_TEXTBOOK_OCR_MIN_COVERAGE_RATIO` | Minimum acceptable text coverage ratio after OCR budget pass | `0.85`                                                            |
+| `MCP_TEXTBOOK_OCR_MAX_PAGES`  | Max number of pages eligible for OCR in textbook ingest             | `120`                                                             |
+| `MCP_TEXTBOOK_OCR_MAX_PAGE_RATIO` | Max OCR page budget as ratio of total pages                    | `0.30`                                                            |
 | `MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS` | Timeout for async textbook ingest jobs                          | `2700`                                                            |
-| `MCP_TEXTBOOK_EMBED_BATCH_SIZE` | Embed batch size for textbook jobs                               | `64`                                                              |
-| `MCP_TEXTBOOK_UPSERT_BATCH_SIZE` | Upsert batch size for textbook jobs                              | `128`                                                             |
-| `MCP_TEXTBOOK_MAX_CONCURRENCY` | Max concurrent textbook embed/upsert workers                       | `4`                                                               |
+| `MCP_TEXTBOOK_EMBED_BATCH_SIZE` | Embed batch size for textbook jobs                               | `32`                                                              |
+| `MCP_TEXTBOOK_UPSERT_BATCH_SIZE` | Upsert batch size for textbook jobs                              | `64`                                                              |
+| `MCP_TEXTBOOK_MAX_CONCURRENCY` | Max concurrent textbook embed/upsert workers                       | `2`                                                               |
+| `MCP_TEXTBOOK_JOB_STATE_DIR`  | Local directory used to persist async textbook job state            | `/tmp/mcp-server-qdrant/jobs`                                    |
+| `MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS` | Retention window for terminal persisted job state         | `168`                                                             |
 | `MCP_DEDUPE_ACTION`           | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
 | `MCP_INGEST_VALIDATION_MODE`  | Validation mode (`allow`, `reject`, `quarantine`)                   | `allow`                                                           |
 | `MCP_QUARANTINE_COLLECTION`   | Collection name for quarantined memories                            | `jarvis-quarantine`                                               |

@@ -323,21 +323,45 @@ class MemorySettings(BaseSettings):
         default=20_000,
         validation_alias="MCP_TEXTBOOK_MAX_CHUNKS",
     )
+    textbook_ocr_low_text_threshold_chars: int = Field(
+        default=120,
+        validation_alias="MCP_TEXTBOOK_OCR_LOW_TEXT_THRESHOLD_CHARS",
+    )
+    textbook_ocr_min_coverage_ratio: float = Field(
+        default=0.85,
+        validation_alias="MCP_TEXTBOOK_OCR_MIN_COVERAGE_RATIO",
+    )
+    textbook_ocr_max_pages: int = Field(
+        default=120,
+        validation_alias="MCP_TEXTBOOK_OCR_MAX_PAGES",
+    )
+    textbook_ocr_max_page_ratio: float = Field(
+        default=0.30,
+        validation_alias="MCP_TEXTBOOK_OCR_MAX_PAGE_RATIO",
+    )
     textbook_job_timeout_seconds: int = Field(
         default=45 * 60,
         validation_alias="MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS",
     )
     textbook_embed_batch_size: int = Field(
-        default=64,
+        default=32,
         validation_alias="MCP_TEXTBOOK_EMBED_BATCH_SIZE",
     )
     textbook_upsert_batch_size: int = Field(
-        default=128,
+        default=64,
         validation_alias="MCP_TEXTBOOK_UPSERT_BATCH_SIZE",
     )
     textbook_max_concurrency: int = Field(
-        default=4,
+        default=2,
         validation_alias="MCP_TEXTBOOK_MAX_CONCURRENCY",
+    )
+    textbook_job_state_dir: str = Field(
+        default="/tmp/mcp-server-qdrant/jobs",
+        validation_alias="MCP_TEXTBOOK_JOB_STATE_DIR",
+    )
+    textbook_job_state_retention_hours: int = Field(
+        default=168,
+        validation_alias="MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS",
     )
 
     @model_validator(mode="after")
@@ -349,13 +373,22 @@ class MemorySettings(BaseSettings):
             "textbook_max_pages",
             "textbook_max_extracted_chars",
             "textbook_max_chunks",
+            "textbook_ocr_low_text_threshold_chars",
+            "textbook_ocr_max_pages",
             "textbook_job_timeout_seconds",
             "textbook_embed_batch_size",
             "textbook_upsert_batch_size",
             "textbook_max_concurrency",
+            "textbook_job_state_retention_hours",
         )
         for field_name in positive_fields:
             value = getattr(self, field_name)
             if value <= 0:
                 raise ValueError(f"{field_name} must be positive.")
+        if not (0 <= self.textbook_ocr_min_coverage_ratio <= 1):
+            raise ValueError("textbook_ocr_min_coverage_ratio must be between 0 and 1.")
+        if not (0 <= self.textbook_ocr_max_page_ratio <= 1):
+            raise ValueError("textbook_ocr_max_page_ratio must be between 0 and 1.")
+        if not self.textbook_job_state_dir.strip():
+            raise ValueError("textbook_job_state_dir must be a non-empty path.")
         return self

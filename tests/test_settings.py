@@ -150,10 +150,16 @@ class TestMemorySettings:
         assert settings.textbook_max_pages == 1000
         assert settings.textbook_max_extracted_chars == 3_000_000
         assert settings.textbook_max_chunks == 20_000
+        assert settings.textbook_ocr_low_text_threshold_chars == 120
+        assert settings.textbook_ocr_min_coverage_ratio == 0.85
+        assert settings.textbook_ocr_max_pages == 120
+        assert settings.textbook_ocr_max_page_ratio == 0.30
         assert settings.textbook_job_timeout_seconds == 45 * 60
-        assert settings.textbook_embed_batch_size == 64
-        assert settings.textbook_upsert_batch_size == 128
-        assert settings.textbook_max_concurrency == 4
+        assert settings.textbook_embed_batch_size == 32
+        assert settings.textbook_upsert_batch_size == 64
+        assert settings.textbook_max_concurrency == 2
+        assert settings.textbook_job_state_dir == "/tmp/mcp-server-qdrant/jobs"
+        assert settings.textbook_job_state_retention_hours == 168
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("MCP_STRICT_PARAMS", "1")
@@ -168,10 +174,16 @@ class TestMemorySettings:
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_PAGES", "250")
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_EXTRACTED_CHARS", "250000")
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_CHUNKS", "1800")
+        monkeypatch.setenv("MCP_TEXTBOOK_OCR_LOW_TEXT_THRESHOLD_CHARS", "90")
+        monkeypatch.setenv("MCP_TEXTBOOK_OCR_MIN_COVERAGE_RATIO", "0.9")
+        monkeypatch.setenv("MCP_TEXTBOOK_OCR_MAX_PAGES", "80")
+        monkeypatch.setenv("MCP_TEXTBOOK_OCR_MAX_PAGE_RATIO", "0.25")
         monkeypatch.setenv("MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS", "600")
         monkeypatch.setenv("MCP_TEXTBOOK_EMBED_BATCH_SIZE", "32")
         monkeypatch.setenv("MCP_TEXTBOOK_UPSERT_BATCH_SIZE", "48")
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_CONCURRENCY", "2")
+        monkeypatch.setenv("MCP_TEXTBOOK_JOB_STATE_DIR", "/tmp/custom-job-store")
+        monkeypatch.setenv("MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS", "72")
         settings = MemorySettings()
         assert settings.strict_params is True
         assert settings.max_text_length == 2048
@@ -185,12 +197,28 @@ class TestMemorySettings:
         assert settings.textbook_max_pages == 250
         assert settings.textbook_max_extracted_chars == 250_000
         assert settings.textbook_max_chunks == 1800
+        assert settings.textbook_ocr_low_text_threshold_chars == 90
+        assert settings.textbook_ocr_min_coverage_ratio == 0.9
+        assert settings.textbook_ocr_max_pages == 80
+        assert settings.textbook_ocr_max_page_ratio == 0.25
         assert settings.textbook_job_timeout_seconds == 600
         assert settings.textbook_embed_batch_size == 32
         assert settings.textbook_upsert_batch_size == 48
         assert settings.textbook_max_concurrency == 2
+        assert settings.textbook_job_state_dir == "/tmp/custom-job-store"
+        assert settings.textbook_job_state_retention_hours == 72
 
     def test_invalid_textbook_limits(self, monkeypatch):
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_FILE_BYTES", "0")
+        with pytest.raises(ValueError):
+            MemorySettings()
+
+    def test_invalid_ocr_ratio_limits(self, monkeypatch):
+        monkeypatch.setenv("MCP_TEXTBOOK_OCR_MIN_COVERAGE_RATIO", "1.1")
+        with pytest.raises(ValueError):
+            MemorySettings()
+
+        monkeypatch.delenv("MCP_TEXTBOOK_OCR_MIN_COVERAGE_RATIO", raising=False)
+        monkeypatch.setenv("MCP_TEXTBOOK_OCR_MAX_PAGE_RATIO", "-0.1")
         with pytest.raises(ValueError):
             MemorySettings()
