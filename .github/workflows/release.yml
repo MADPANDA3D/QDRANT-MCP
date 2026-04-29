@@ -15,8 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_OWNER_LOWER: ${{ github.repository_owner }}
-      GH_PACKAGES_USER: ${{ secrets.GH_PACKAGES_USER || github.actor }}
-      GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,8 +78,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ env.GH_PACKAGES_USER }}
-          password: ${{ env.GH_PACKAGES_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push GHCR image
         if: steps.release_tag.outputs.tag != ''
