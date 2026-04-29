@@ -199,6 +199,7 @@ class FakeSchemaConnector(FakeSearchConnector):
             "metadata.status": "keyword",
             "metadata.title": "keyword",
             "metadata.doc_id": "keyword",
+            "metadata.text_hash": "keyword",
         }
 
     async def scroll_points_page(
@@ -219,6 +220,7 @@ class FakeSchemaConnector(FakeSearchConnector):
                     "status": "active",
                     "title": "Music Module 1",
                     "doc_id": "music-1",
+                    "text_hash": "hash-1",
                 }
             },
             {
@@ -228,6 +230,7 @@ class FakeSchemaConnector(FakeSearchConnector):
                     "status": "archived",
                     "title": "Labor Relations Module 2",
                     "doc_id": "labor-2",
+                    "text_hash": "hash-2",
                 }
             },
         ]
@@ -618,6 +621,10 @@ async def test_collection_navigation_describes_schema_and_suggests_filters() -> 
     }
     field_names = {field["field"] for field in suggested["data"]["fields"]}
     assert {"class", "module", "status"}.issubset(field_names)
+    assert "text_hash" not in field_names
+    assert all(
+        len(field["sample_values"]) <= 4 for field in suggested["data"]["fields"]
+    )
 
 
 @pytest.mark.asyncio

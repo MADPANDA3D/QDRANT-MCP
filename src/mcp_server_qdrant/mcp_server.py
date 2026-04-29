@@ -593,6 +593,7 @@ class QdrantMCPServer(FastMCP):
             "section_heading",
             "labels",
         )
+        SUGGEST_FILTER_DEFAULT_EXCLUDED_FIELDS = {"text_hash"}
         DRY_RUN_PREVIEW_FIELDS = (
             "text",
             "type",
@@ -827,8 +828,12 @@ class QdrantMCPServer(FastMCP):
                 return
             values = value if isinstance(value, list) else [value]
             existing = samples.setdefault(field_name, [])
+            if len(existing) >= max_values:
+                return
             seen = {str(item).lower() for item in existing}
             for item in values:
+                if len(existing) >= max_values:
+                    break
                 if item is None:
                     continue
                 compacted = compact_value(item)
@@ -8155,6 +8160,7 @@ class QdrantMCPServer(FastMCP):
                     field
                     for field in normalized_schema_fields
                     if field in FILTER_FIELDS
+                    and field not in SUGGEST_FILTER_DEFAULT_EXCLUDED_FIELDS
                 ]
             else:
                 selected_fields = [
