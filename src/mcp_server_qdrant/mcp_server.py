@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import difflib
 import hashlib
 import json
 import logging
@@ -542,6 +543,17 @@ class QdrantMCPServer(FastMCP):
             "type",
             "scope",
             "source",
+            "class",
+            "subject",
+            "module",
+            "status",
+            "year",
+            "material_type",
+            "title",
+            "author",
+            "edition",
+            "isbn",
+            "publisher",
             "labels",
             "entities",
             "doc_id",
@@ -1400,6 +1412,7 @@ class QdrantMCPServer(FastMCP):
             name = resolve_health_collection(collection_name)
             checks: dict[str, Any] = {}
             ok = True
+            collections: list[str] = []
 
             try:
                 collections = await self.qdrant_connector.get_collection_names()
@@ -1419,7 +1432,21 @@ class QdrantMCPServer(FastMCP):
             optimizer_ok: bool | None = None
             try:
                 exists = await self.qdrant_connector.collection_exists(name)
-                checks["collection_exists"] = {"ok": exists, "collection_name": name}
+                collection_check: dict[str, Any] = {
+                    "ok": exists,
+                    "collection_name": name,
+                }
+                if not exists and collections:
+                    collection_check["available_collections"] = collections[:20]
+                    collection_check["suggested_collections"] = (
+                        difflib.get_close_matches(
+                            name,
+                            collections,
+                            n=3,
+                            cutoff=0.45,
+                        )
+                    )
+                checks["collection_exists"] = collection_check
                 if not exists:
                     ok = False
             except Exception as exc:  # pragma: no cover
@@ -2488,6 +2515,109 @@ class QdrantMCPServer(FastMCP):
                 "response_mode": response_mode,
             }
             return finish_request(state, data, extra_meta=extra_meta)
+
+        async def study_search(
+            ctx: Context,
+            query: Annotated[
+                str,
+                Field(
+                    description=(
+                        "Study query to search semantically across school materials."
+                    )
+                ),
+            ],
+            collection_name: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Study collection to search. Defaults to MCP_STUDY_COLLECTION."
+                    )
+                ),
+            ] = None,
+            class_code: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Optional exact course/class code filter, such as MUS327."
+                    )
+                ),
+            ] = None,
+            subject: Annotated[
+                str | None,
+                Field(description="Optional exact subject filter."),
+            ] = None,
+            material_type: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Optional exact material type filter, such as textbook or lesson."
+                    )
+                ),
+            ] = None,
+            title: Annotated[
+                str | None,
+                Field(description="Optional exact title filter."),
+            ] = None,
+            doc_id: Annotated[
+                str | None,
+                Field(description="Optional exact document id filter."),
+            ] = None,
+            chapter: Annotated[
+                str | int | None,
+                Field(description="Optional exact chapter number or label filter."),
+            ] = None,
+            top_k: Annotated[
+                int,
+                Field(description="Max compact results to return. Use 3-5 first."),
+            ] = 5,
+            response_mode: Annotated[
+                Literal["compact", "metadata", "payload"],
+                Field(
+                    description=(
+                        "Result detail level. Keep compact unless full payload is required."
+                    )
+                ),
+            ] = "compact",
+            snippet_chars: Annotated[
+                int,
+                Field(
+                    description="Max snippet length in characters, clamped to 40-1200."
+                ),
+            ] = 320,
+            use_mmr: Annotated[
+                bool,
+                Field(description="Enable MMR for diverse study retrieval."),
+            ] = False,
+        ) -> dict[str, Any]:
+            filters: dict[str, Any] = {}
+            optional_filters = {
+                "class": class_code,
+                "subject": subject,
+                "material_type": material_type,
+                "title": title,
+                "doc_id": doc_id,
+                "chapter": chapter,
+            }
+            for key, value in optional_filters.items():
+                if value is not None and str(value).strip():
+                    filters[key] = value
+
+            study_filter = (
+                MemoryFilterInput.model_validate(filters) if filters else None
+            )
+            return await find(
+                ctx,
+                query=query,
+                collection_name=(
+                    collection_name or self.memory_settings.study_collection
+                ),
+                memory_filter=study_filter,
+                query_filter=None,
+                top_k=top_k,
+                response_mode=response_mode,
+                snippet_chars=snippet_chars,
+                use_mmr=use_mmr,
+            )
 
         async def recommend_memories(
             ctx: Context,
@@ -7140,6 +7270,7 @@ class QdrantMCPServer(FastMCP):
                     {
                         "name": "memory",
                         "tools": [
+                            "qdrant-study-search",
                             "qdrant-find",
                             "qdrant-store",
                             "qdrant-ingest-document",
@@ -7217,6 +7348,11 @@ class QdrantMCPServer(FastMCP):
             if not self._tool_manager.has_tool(normalized_name):
                 raise ValueError(f"Unknown tool '{tool_name}'.")
             tool = self._tool_manager.get_tool(normalized_name)
+            search_guidance_tools = {
+                "qdrant-find",
+                "qdrant-study-search",
+                "qdrant-recommend-memories",
+            }
             data = {
                 "name": normalized_name,
                 "description": tool.description,
@@ -7228,12 +7364,13 @@ class QdrantMCPServer(FastMCP):
                     "For search tools, start with response_mode='compact' and top_k=3-5. "
                     "Use response_mode='payload' only when the full document/payload is required."
                 )
-                if normalized_name in {"qdrant-find", "qdrant-recommend-memories"}
+                if normalized_name in search_guidance_tools
                 else None,
             }
             return finish_request(state, data)
 
         find_foo = find
+        study_search_foo = study_search
         recommend_memories_foo = recommend_memories
         store_foo = store
         cache_memory_foo = cache_memory
@@ -7418,6 +7555,14 @@ class QdrantMCPServer(FastMCP):
             "qdrant-get-endpoint-coverage",
             "qdrant-get-tool-usage",
         }
+        common_parameter_descriptions = {
+            "collection_name": "Qdrant collection name to use for this operation.",
+            "query_filter": (
+                "Raw Qdrant filter object. Prefer memory_filter unless arbitrary "
+                "filters are explicitly enabled."
+            ),
+            "shard_id": "Qdrant shard id to inspect.",
+        }
         destructive_tool_names = {
             "qdrant-delete-points",
             "qdrant-delete-by-filter",
@@ -7485,6 +7630,17 @@ class QdrantMCPServer(FastMCP):
                     openWorldHint=open_world,
                 ),
             )
+            tool = self._tool_manager.get_tool(name)
+            properties = tool.parameters.get("properties", {})
+            for (
+                property_name,
+                fallback_description,
+            ) in common_parameter_descriptions.items():
+                property_schema = properties.get(property_name)
+                if isinstance(property_schema, dict) and not property_schema.get(
+                    "description"
+                ):
+                    property_schema["description"] = fallback_description
 
         register_tool(
             check_configuration,
@@ -7519,6 +7675,17 @@ class QdrantMCPServer(FastMCP):
             health_check,
             name="qdrant-health-check",
             description="Run health checks against Qdrant and embedding clients.",
+        )
+
+        register_tool(
+            study_search_foo,
+            name="qdrant-study-search",
+            description=(
+                "Search school/study materials with compact results by default. "
+                "Defaults to MCP_STUDY_COLLECTION and supports course, subject, "
+                "material_type, title, doc_id, and chapter filters to avoid noisy "
+                "cross-course retrieval."
+            ),
         )
 
         register_tool(

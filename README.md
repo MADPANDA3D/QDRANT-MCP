@@ -149,6 +149,9 @@ results unless `response_mode="payload"` is requested. Start with `top_k=3-5`,
 add filters when possible, and increase detail only after selecting a specific
 result. For large content, prefer `qdrant-ingest-document` or
 `qdrant-ingest-textbook` instead of sending long text directly to store tools.
+For school work, start with `qdrant-study-search`; it defaults to the
+`MCP_STUDY_COLLECTION` collection and exposes course, subject, material type,
+title, document, and chapter filters directly.
 
 <details>
 <summary>Core Memory Tools</summary>
@@ -166,6 +169,7 @@ result. For large content, prefer `qdrant-ingest-document` or
   - Uses streaming download + page-wise extraction to reduce memory pressure.
   - With `ocr=true`, applies OCR coverage-gating (blank/low-text pages first) and fails fast if target coverage cannot be met within budget.
   - Job status is persisted on disk so restart scenarios return structured failure instead of `Job not found`.
+- `qdrant-study-search`: search school/study materials with compact output and direct course/subject/title filters.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
 - `qdrant-recommend-memories`: recommend memories using positive/negative examples.
@@ -301,6 +305,7 @@ result. For large content, prefer `qdrant-ingest-document` or
 | `MCP_QUARANTINE_COLLECTION`   | Collection name for quarantined memories                            | `jarvis-quarantine`                                               |
 | `MCP_HEALTH_CHECK_COLLECTION` | Default collection for health check                                 | unset                                                             |
 | `MCP_SHORT_TERM_COLLECTION`   | Collection name for short-term memory cache                          | `jarvis-short-term`                                               |
+| `MCP_STUDY_COLLECTION`        | Default collection for `qdrant-study-search`                        | `school`                                                          |
 | `MCP_SHORT_TERM_TTL_DAYS`     | Default TTL (days) for short-term memory cache                       | `7`                                                               |
 | `MCP_SERVER_VERSION`          | Optional git SHA for telemetry                                      | unset                                                             |
 | `MCP_ALLOW_REQUEST_OVERRIDES` | Allow per-request Qdrant headers                                    | `false`                                                           |

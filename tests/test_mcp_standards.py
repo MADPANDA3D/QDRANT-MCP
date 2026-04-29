@@ -47,9 +47,16 @@ class FakeSearchConnector:
     def __init__(self) -> None:
         self.query_calls = 0
         self.query_vectors: list[list[float]] = []
+        self.collection_names: list[str | None] = []
+        self.query_filters: list[models.Filter | None] = []
         self.payload = {
             "document": "This is the full stored document. " * 40,
             METADATA_PATH: {
+                "class": "MUS327",
+                "subject": "World Music",
+                "module": "1",
+                "material_type": "lesson",
+                "title": "Module 1 Lesson 1",
                 "type": "note",
                 "scope": "global",
                 "source": "test",
@@ -70,6 +77,8 @@ class FakeSearchConnector:
     ) -> list[models.ScoredPoint]:
         self.query_calls += 1
         self.query_vectors.append(query_vector)
+        self.collection_names.append(collection_name)
+        self.query_filters.append(query_filter)
         return [
             models.ScoredPoint(
                 id="point-1",
@@ -95,6 +104,14 @@ class FakeSearchConnector:
             models.Record(id=point_id, payload=None, vector=[0.1, 0.2, 0.3])
             for point_id in point_ids
         ]
+
+
+class FakeHealthConnector:
+    async def get_collection_names(self) -> list[str]:
+        return ["school", "jarvis-knowledgebase", "memories"]
+
+    async def collection_exists(self, collection_name: str) -> bool:
+        return False
 
 
 def make_server(
@@ -220,6 +237,12 @@ def test_every_registered_tool_has_required_annotations() -> None:
     assert find_tool.annotations.readOnlyHint is True
     assert find_tool.annotations.destructiveHint is False
 
+    for tool in tools:
+        for property_name, property_schema in tool.parameters.get(
+            "properties", {}
+        ).items():
+            assert property_schema.get("description"), f"{tool.name}.{property_name}"
+
 
 @pytest.mark.asyncio
 async def test_compact_search_default_excludes_payload_and_cache_reuses_embedding() -> (
@@ -242,6 +265,11 @@ async def test_compact_search_default_excludes_payload_and_cache_reuses_embeddin
     assert "payload" not in result
     assert "document" not in result
     assert result["metadata"] == {
+        "class": "MUS327",
+        "subject": "World Music",
+        "module": "1",
+        "material_type": "lesson",
+        "title": "Module 1 Lesson 1",
         "type": "note",
         "scope": "global",
         "source": "test",
@@ -260,6 +288,36 @@ async def test_compact_search_default_excludes_payload_and_cache_reuses_embeddin
     assert provider.query_calls == 1
     assert provider.document_calls == 0
     assert connector.query_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_study_search_defaults_to_school_collection_and_compact_filters() -> None:
+    server, _ = make_server()
+    connector = FakeSearchConnector()
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        connector,
+    )
+    study_tool = server._tool_manager.get_tool("qdrant-study-search")
+
+    response = await study_tool.fn(
+        SimpleNamespace(request_id="study-test"),
+        query="forced retrieval melody",
+        class_code="MUS327",
+        subject="World Music",
+        material_type="lesson",
+        top_k=3,
+    )
+
+    assert connector.collection_names == ["school"]
+    assert connector.query_filters[0] is not None
+    filter_keys = {condition.key for condition in connector.query_filters[0].must}
+    assert "metadata.class" in filter_keys
+    assert "metadata.subject" in filter_keys
+    assert "metadata.material_type" in filter_keys
+    result = response["data"]["results"][0]
+    assert "payload" not in result
+    assert result["metadata"]["class"] == "MUS327"
 
 
 @pytest.mark.asyncio
@@ -317,6 +375,23 @@ async def test_navigation_tools_return_stable_compact_outputs() -> None:
     assert "top_k=3-5" in usage["data"]["guidance"]
 
 
+@pytest.mark.asyncio
+async def test_health_check_suggests_close_collection_names() -> None:
+    server, _ = make_server(collection_name="jarvis-knowledge-base")
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        FakeHealthConnector(),
+    )
+    health_tool = server._tool_manager.get_tool("qdrant-health-check")
+
+    response = await health_tool.fn(SimpleNamespace(request_id="health-test"))
+
+    check = response["data"]["checks"]["collection_exists"]
+    assert check["ok"] is False
+    assert check["collection_name"] == "jarvis-knowledge-base"
+    assert "jarvis-knowledgebase" in check["suggested_collections"]
+
+
 def test_env_example_and_endpoint_coverage_docs_are_present(monkeypatch) -> None:
     env_example = Path(".env.example").read_text()
     required_names = {
@@ -339,6 +414,7 @@ def test_env_example_and_endpoint_coverage_docs_are_present(monkeypatch) -> None
         "MCP_OPENAI_API_KEY_HEADER",
         "MCP_QUERY_EMBEDDING_CACHE_SIZE",
         "MCP_QUERY_EMBEDDING_CACHE_TTL_SECONDS",
+        "MCP_STUDY_COLLECTION",
         "FASTMCP_SERVER_HOST",
         "FASTMCP_SERVER_PORT",
         "FORWARDED_ALLOW_IPS",

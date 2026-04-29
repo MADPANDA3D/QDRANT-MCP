@@ -161,6 +161,7 @@ class TestMemorySettings:
         assert settings.ingest_validation_mode == "allow"
         assert settings.quarantine_collection == "jarvis-quarantine"
         assert settings.short_term_collection == "jarvis-short-term"
+        assert settings.study_collection == "school"
         assert settings.short_term_ttl_days == 7
         assert settings.textbook_max_file_bytes == 100 * 1024 * 1024
         assert settings.textbook_max_pages == 1000
@@ -187,6 +188,7 @@ class TestMemorySettings:
         monkeypatch.setenv("MCP_INGEST_VALIDATION_MODE", "quarantine")
         monkeypatch.setenv("MCP_QUARANTINE_COLLECTION", "jarvis-quarantine-dev")
         monkeypatch.setenv("MCP_SHORT_TERM_COLLECTION", "jarvis-short-term-dev")
+        monkeypatch.setenv("MCP_STUDY_COLLECTION", "school-dev")
         monkeypatch.setenv("MCP_SHORT_TERM_TTL_DAYS", "3")
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_FILE_BYTES", "1048576")
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_PAGES", "250")
@@ -212,6 +214,7 @@ class TestMemorySettings:
         assert settings.ingest_validation_mode == "quarantine"
         assert settings.quarantine_collection == "jarvis-quarantine-dev"
         assert settings.short_term_collection == "jarvis-short-term-dev"
+        assert settings.study_collection == "school-dev"
         assert settings.short_term_ttl_days == 3
         assert settings.textbook_max_file_bytes == 1_048_576
         assert settings.textbook_max_pages == 250

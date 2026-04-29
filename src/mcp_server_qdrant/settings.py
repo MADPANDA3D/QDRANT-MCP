@@ -319,6 +319,10 @@ class MemorySettings(BaseSettings):
         default="jarvis-short-term",
         validation_alias="MCP_SHORT_TERM_COLLECTION",
     )
+    study_collection: str = Field(
+        default="school",
+        validation_alias="MCP_STUDY_COLLECTION",
+    )
     short_term_ttl_days: int = Field(
         default=7,
         validation_alias="MCP_SHORT_TERM_TTL_DAYS",
@@ -415,6 +419,8 @@ class MemorySettings(BaseSettings):
             raise ValueError("textbook_ocr_max_page_ratio must be between 0 and 1.")
         if not self.textbook_job_state_dir.strip():
             raise ValueError("textbook_job_state_dir must be a non-empty path.")
+        if not self.study_collection.strip():
+            raise ValueError("study_collection must be a non-empty collection name.")
         if self.query_embedding_cache_size < 0:
             raise ValueError("query_embedding_cache_size must be >= 0.")
         if self.query_embedding_cache_ttl_seconds < 0:
