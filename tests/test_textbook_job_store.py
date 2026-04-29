@@ -29,7 +29,9 @@ class DummyEmbeddingProvider(EmbeddingProvider):
 def make_server(job_state_dir: Path, retention_hours: int = 168) -> QdrantMCPServer:
     return QdrantMCPServer(
         tool_settings=ToolSettings(),
-        qdrant_settings=QdrantSettings.model_validate({"QDRANT_LOCAL_PATH": ":memory:"}),
+        qdrant_settings=QdrantSettings.model_validate(
+            {"QDRANT_LOCAL_PATH": ":memory:"}
+        ),
         request_override_settings=RequestOverrideSettings(),
         memory_settings=MemorySettings.model_validate(
             {

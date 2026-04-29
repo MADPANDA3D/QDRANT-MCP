@@ -7,6 +7,7 @@ from mcp_server_qdrant.settings import (
     EmbeddingProviderSettings,
     MemorySettings,
     QdrantSettings,
+    RequestOverrideSettings,
     ToolSettings,
 )
 
@@ -85,6 +86,21 @@ class TestEmbeddingProviderSettings:
         settings = EmbeddingProviderSettings()
         assert settings.version == "v1"
 
+    def test_empty_vector_size_is_none(self, monkeypatch):
+        monkeypatch.setenv("EMBEDDING_VECTOR_SIZE", "")
+        settings = EmbeddingProviderSettings()
+        assert settings.vector_size is None
+
+
+class TestRequestOverrideSettings:
+    def test_allowlist_accepts_comma_separated_env(self, monkeypatch):
+        monkeypatch.setenv(
+            "MCP_QDRANT_HOST_ALLOWLIST",
+            "*.qdrant.io, example.com",
+        )
+        settings = RequestOverrideSettings()
+        assert settings.qdrant_host_allowlist == ["*.qdrant.io", "example.com"]
+
 
 class TestToolSettings:
     def test_default_values(self):
@@ -160,6 +176,8 @@ class TestMemorySettings:
         assert settings.textbook_max_concurrency == 2
         assert settings.textbook_job_state_dir == "/tmp/mcp-server-qdrant/jobs"
         assert settings.textbook_job_state_retention_hours == 168
+        assert settings.query_embedding_cache_size == 256
+        assert settings.query_embedding_cache_ttl_seconds == 3600
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("MCP_STRICT_PARAMS", "1")
@@ -184,6 +202,8 @@ class TestMemorySettings:
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_CONCURRENCY", "2")
         monkeypatch.setenv("MCP_TEXTBOOK_JOB_STATE_DIR", "/tmp/custom-job-store")
         monkeypatch.setenv("MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS", "72")
+        monkeypatch.setenv("MCP_QUERY_EMBEDDING_CACHE_SIZE", "64")
+        monkeypatch.setenv("MCP_QUERY_EMBEDDING_CACHE_TTL_SECONDS", "120")
         settings = MemorySettings()
         assert settings.strict_params is True
         assert settings.max_text_length == 2048
@@ -207,6 +227,8 @@ class TestMemorySettings:
         assert settings.textbook_max_concurrency == 2
         assert settings.textbook_job_state_dir == "/tmp/custom-job-store"
         assert settings.textbook_job_state_retention_hours == 72
+        assert settings.query_embedding_cache_size == 64
+        assert settings.query_embedding_cache_ttl_seconds == 120
 
     def test_invalid_textbook_limits(self, monkeypatch):
         monkeypatch.setenv("MCP_TEXTBOOK_MAX_FILE_BYTES", "0")

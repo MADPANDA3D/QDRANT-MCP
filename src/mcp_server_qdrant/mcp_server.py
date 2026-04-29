@@ -7,12 +7,13 @@ import math
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -26,7 +27,7 @@ except ImportError:  # pragma: no cover - older FastMCP
         return {}
 
 
-from mcp.types import EmbeddedResource, ImageContent, TextContent
+from mcp.types import EmbeddedResource, ImageContent, TextContent, ToolAnnotations
 from pydantic import Field
 from qdrant_client import models
 
@@ -208,6 +209,9 @@ class QdrantMCPServer(FastMCP):
         )
         self._jobs: dict[str, dict[str, Any]] = {}
         self._job_tasks: dict[str, asyncio.Task] = {}
+        self._query_embedding_cache: OrderedDict[
+            tuple[str, str, int, str, str], tuple[float, list[float]]
+        ] = OrderedDict()
 
         super().__init__(name=name, instructions=instructions, **settings)
 
@@ -239,6 +243,35 @@ class QdrantMCPServer(FastMCP):
     @embedding_info.setter
     def embedding_info(self, value: EmbeddingInfo) -> None:
         self._default_embedding_info = value
+
+    def _query_embedding_cache_key(self, query: str) -> tuple[str, str, int, str, str]:
+        info = self.embedding_info
+        query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
+        provider_identity = str(id(self.embedding_provider))
+        return (info.provider, info.model, info.dim, provider_identity, query_hash)
+
+    async def _embed_query_cached(self, query: str) -> list[float]:
+        cache_size = self.memory_settings.query_embedding_cache_size
+        cache_ttl = self.memory_settings.query_embedding_cache_ttl_seconds
+        if cache_size <= 0 or cache_ttl <= 0:
+            return await self.embedding_provider.embed_query(query)
+
+        key = self._query_embedding_cache_key(query)
+        now = time.monotonic()
+        cached = self._query_embedding_cache.get(key)
+        if cached is not None:
+            cached_at, vector = cached
+            if now - cached_at <= cache_ttl:
+                self._query_embedding_cache.move_to_end(key)
+                return list(vector)
+            self._query_embedding_cache.pop(key, None)
+
+        vector = await self.embedding_provider.embed_query(query)
+        self._query_embedding_cache[key] = (now, list(vector))
+        self._query_embedding_cache.move_to_end(key)
+        while len(self._query_embedding_cache) > cache_size:
+            self._query_embedding_cache.popitem(last=False)
+        return vector
 
     def _normalize_headers(self, headers: Mapping[str, Any] | None) -> dict[str, str]:
         if not headers:
@@ -505,6 +538,26 @@ class QdrantMCPServer(FastMCP):
 
         DRY_RUN_PREVIEW_LIMIT = 5
         DRY_RUN_GROUP_FIELDS = ("scope", "type", "labels", "source", "doc_id")
+        SEARCH_COMPACT_METADATA_FIELDS = (
+            "type",
+            "scope",
+            "source",
+            "labels",
+            "entities",
+            "doc_id",
+            "doc_title",
+            "file_name",
+            "file_type",
+            "page_start",
+            "page_end",
+            "section_heading",
+            "created_at",
+            "updated_at",
+            "confidence",
+            "embedding_model",
+            "embedding_provider",
+            "embedding_version",
+        )
         DRY_RUN_PREVIEW_FIELDS = (
             "text",
             "type",
@@ -570,7 +623,7 @@ class QdrantMCPServer(FastMCP):
             return value
 
         def compact_metadata(
-            metadata: dict[str, Any], keys: set[str] | None = None
+            metadata: dict[str, Any], keys: tuple[str, ...] | set[str] | None = None
         ) -> dict[str, Any]:
             if not isinstance(metadata, dict):
                 return {}
@@ -580,6 +633,37 @@ class QdrantMCPServer(FastMCP):
             for key in keys:
                 if key in metadata:
                     result[key] = compact_value(metadata.get(key))
+            return result
+
+        def clamp_snippet_chars(value: int) -> int:
+            return max(40, min(value, 1200))
+
+        def format_search_result(
+            point: models.ScoredPoint,
+            *,
+            response_mode: str,
+            snippet_chars: int,
+        ) -> dict[str, Any]:
+            payload = point.payload or {}
+            metadata = extract_metadata(payload)
+            text = extract_payload_text(payload)
+            result: dict[str, Any] = {
+                "id": str(point.id),
+                "score": point.score,
+                "snippet": make_snippet(text, max_length=snippet_chars),
+            }
+            if response_mode == "compact":
+                selected = compact_metadata(metadata, SEARCH_COMPACT_METADATA_FIELDS)
+                if selected:
+                    result["metadata"] = selected
+            elif response_mode == "metadata":
+                result["metadata"] = compact_metadata(metadata)
+            elif response_mode == "payload":
+                result["payload"] = payload
+            else:
+                raise ValueError(
+                    "response_mode must be one of: compact, metadata, payload."
+                )
             return result
 
         def build_structured_error_payload(
@@ -2274,8 +2358,24 @@ class QdrantMCPServer(FastMCP):
             ] = None,
             query_filter: ArbitraryFilter | None = None,
             top_k: Annotated[
-                int | None, Field(description="Max number of results to return.")
+                int | None,
+                Field(description="Max number of results to return. Start with 3-5."),
             ] = None,
+            response_mode: Annotated[
+                Literal["compact", "metadata", "payload"],
+                Field(
+                    description=(
+                        "Result detail level. compact returns ids, scores, snippets, "
+                        "and selected metadata; payload returns full Qdrant payloads."
+                    )
+                ),
+            ] = "compact",
+            snippet_chars: Annotated[
+                int,
+                Field(
+                    description="Max snippet length in characters, clamped to 40-1200."
+                ),
+            ] = 240,
             use_mmr: Annotated[
                 bool, Field(description="Enable MMR for diverse retrieval.")
             ] = False,
@@ -2292,6 +2392,8 @@ class QdrantMCPServer(FastMCP):
                     "memory_filter": memory_filter,
                     "query_filter": query_filter,
                     "top_k": top_k,
+                    "response_mode": response_mode,
+                    "snippet_chars": snippet_chars,
                     "use_mmr": use_mmr,
                     "mmr_lambda": mmr_lambda,
                 },
@@ -2317,10 +2419,12 @@ class QdrantMCPServer(FastMCP):
             limit = top_k or self.qdrant_settings.search_limit
             if limit <= 0:
                 raise ValueError("top_k must be positive.")
+            snippet_chars = clamp_snippet_chars(snippet_chars)
 
             collection = resolve_collection_name(collection_name)
             filter_applied = combined_filter is not None
             query_vector_dim = self.embedding_provider.get_vector_size()
+            query_vector = await self._embed_query_cached(query)
 
             points: list[models.ScoredPoint]
             if use_mmr:
@@ -2330,7 +2434,6 @@ class QdrantMCPServer(FastMCP):
                     state.warnings.append("mmr_lambda clamped to [0,1].")
                     mmr_lambda = max(0.0, min(1.0, mmr_lambda))
 
-                query_vector = await self.embedding_provider.embed_query(query)
                 vector_name = await self.qdrant_connector.resolve_vector_name(
                     collection
                 )
@@ -2355,8 +2458,8 @@ class QdrantMCPServer(FastMCP):
                 else:
                     points = selected
             else:
-                points = await self.qdrant_connector.search_points(
-                    query,
+                points = await self.qdrant_connector.query_points(
+                    query_vector,
                     collection_name=collection,
                     limit=limit,
                     query_filter=combined_filter,
@@ -2364,15 +2467,12 @@ class QdrantMCPServer(FastMCP):
 
             results = []
             for point in points:
-                payload = point.payload or {}
-                text = extract_payload_text(payload)
                 results.append(
-                    {
-                        "id": str(point.id),
-                        "score": point.score,
-                        "payload": payload,
-                        "snippet": make_snippet(text),
-                    }
+                    format_search_result(
+                        point,
+                        response_mode=response_mode,
+                        snippet_chars=snippet_chars,
+                    )
                 )
 
             data = {
@@ -2385,6 +2485,7 @@ class QdrantMCPServer(FastMCP):
                 "filter_applied": filter_applied,
                 "query_vector_dim": query_vector_dim,
                 "mmr": use_mmr,
+                "response_mode": response_mode,
             }
             return finish_request(state, data, extra_meta=extra_meta)
 
@@ -2406,8 +2507,24 @@ class QdrantMCPServer(FastMCP):
             ] = None,
             query_filter: ArbitraryFilter | None = None,
             top_k: Annotated[
-                int | None, Field(description="Max number of results to return.")
+                int | None,
+                Field(description="Max number of results to return. Start with 3-5."),
             ] = None,
+            response_mode: Annotated[
+                Literal["compact", "metadata", "payload"],
+                Field(
+                    description=(
+                        "Result detail level. compact returns ids, scores, snippets, "
+                        "and selected metadata; payload returns full Qdrant payloads."
+                    )
+                ),
+            ] = "compact",
+            snippet_chars: Annotated[
+                int,
+                Field(
+                    description="Max snippet length in characters, clamped to 40-1200."
+                ),
+            ] = 240,
             negative_weight: Annotated[
                 float,
                 Field(description="Weight for negative vectors in the blend."),
@@ -2422,6 +2539,8 @@ class QdrantMCPServer(FastMCP):
                     "memory_filter": memory_filter,
                     "query_filter": query_filter,
                     "top_k": top_k,
+                    "response_mode": response_mode,
+                    "snippet_chars": snippet_chars,
                     "negative_weight": negative_weight,
                 },
             )
@@ -2465,6 +2584,7 @@ class QdrantMCPServer(FastMCP):
             limit = top_k or self.qdrant_settings.search_limit
             if limit <= 0:
                 raise ValueError("top_k must be positive.")
+            snippet_chars = clamp_snippet_chars(snippet_chars)
 
             collection = resolve_collection_name(collection_name)
             vector_name = await self.qdrant_connector.resolve_vector_name(collection)
@@ -2521,15 +2641,12 @@ class QdrantMCPServer(FastMCP):
                 point_id = str(point.id)
                 if point_id in exclude_ids:
                     continue
-                payload = point.payload or {}
-                text = extract_payload_text(payload)
                 results.append(
-                    {
-                        "id": point_id,
-                        "score": point.score,
-                        "payload": payload,
-                        "snippet": make_snippet(text),
-                    }
+                    format_search_result(
+                        point,
+                        response_mode=response_mode,
+                        snippet_chars=snippet_chars,
+                    )
                 )
                 if len(results) >= limit:
                     break
@@ -2544,6 +2661,7 @@ class QdrantMCPServer(FastMCP):
                 "top_k": limit,
                 "filter_applied": combined_filter is not None,
                 "query_vector_dim": len(query_vector),
+                "response_mode": response_mode,
             }
             return finish_request(state, data, extra_meta=extra_meta)
 
@@ -6967,6 +7085,154 @@ class QdrantMCPServer(FastMCP):
             data = {"job_id": job_id, "status": "cancelled", "cancelled": True}
             return finish_request(state, data)
 
+        async def check_configuration(ctx: Context) -> dict[str, Any]:
+            state = new_request(ctx, {})
+            qdrant_configured = bool(
+                self.qdrant_settings.location or self.qdrant_settings.local_path
+            )
+            portal_grant_configured = bool(
+                self.request_override_settings.portal_grant_token
+            )
+            missing: list[str] = []
+            data = {
+                "service": "qdrant-mcp",
+                "portal_grant_configured": portal_grant_configured,
+                "request_overrides_enabled": self.request_override_settings.allow_request_overrides,
+                "default_qdrant_configured": qdrant_configured,
+                "default_collection_configured": bool(
+                    self.qdrant_settings.collection_name
+                ),
+                "embedding_provider": self.embedding_info.provider,
+                "embedding_model": self.embedding_info.model,
+                "admin_tools_enabled": self.tool_settings.admin_tools_enabled,
+                "read_only": self.qdrant_settings.read_only,
+                "missing": missing,
+                "query_embedding_cache": {
+                    "size": self.memory_settings.query_embedding_cache_size,
+                    "ttl_seconds": self.memory_settings.query_embedding_cache_ttl_seconds,
+                    "entries": len(self._query_embedding_cache),
+                },
+                "accepted_headers": [
+                    self.request_override_settings.portal_grant_header,
+                    self.request_override_settings.qdrant_url_header,
+                    self.request_override_settings.qdrant_api_key_header,
+                    self.request_override_settings.collection_name_header,
+                    self.request_override_settings.embedding_provider_header,
+                    self.request_override_settings.embedding_model_header,
+                    self.request_override_settings.openai_api_key_header,
+                ],
+            }
+            if not portal_grant_configured:
+                missing.append("MCP_PORTAL_GRANT_TOKEN")
+            if (
+                not qdrant_configured
+                and not self.request_override_settings.allow_request_overrides
+            ):
+                missing.append("QDRANT_URL or QDRANT_LOCAL_PATH")
+            return finish_request(state, data)
+
+        async def list_capabilities(ctx: Context) -> dict[str, Any]:
+            state = new_request(ctx, {})
+            data = {
+                "service": "qdrant-mcp",
+                "tool_count": len(getattr(self._tool_manager, "_tools", {})),
+                "groups": [
+                    {
+                        "name": "memory",
+                        "tools": [
+                            "qdrant-find",
+                            "qdrant-store",
+                            "qdrant-ingest-document",
+                            "qdrant-ingest-textbook",
+                        ],
+                        "guidance": "Use compact search with top_k=3-5 before requesting payloads.",
+                    },
+                    {
+                        "name": "collections",
+                        "tools": [
+                            "qdrant-list-collections",
+                            "qdrant-create-collection",
+                            "qdrant-collection-info",
+                        ],
+                    },
+                    {
+                        "name": "maintenance",
+                        "tools": [
+                            "qdrant-audit-memories",
+                            "qdrant-dedupe-memories",
+                            "qdrant-reembed-points",
+                        ],
+                        "guidance": "Run mutating tools with dry_run first and confirm only after reviewing the diff.",
+                    },
+                    {
+                        "name": "navigation",
+                        "tools": [
+                            "qdrant-check-configuration",
+                            "qdrant-list-capabilities",
+                            "qdrant-get-endpoint-coverage",
+                            "qdrant-get-tool-usage",
+                        ],
+                    },
+                ],
+            }
+            return finish_request(state, data)
+
+        async def get_endpoint_coverage(ctx: Context) -> dict[str, Any]:
+            state = new_request(ctx, {})
+            data = {
+                "source": "docs/endpoint-coverage.md",
+                "provider_docs": [
+                    "https://api.qdrant.tech/master/api-reference",
+                    "https://api.qdrant.tech/api-reference/collections",
+                    "https://api.qdrant.tech/api-reference/points",
+                    "https://api.qdrant.tech/api-reference/aliases/get-collections-aliases",
+                    "https://api.qdrant.tech/api-reference/snapshots/list-snapshots",
+                    "https://api.qdrant.tech/api-reference/service",
+                ],
+                "summary": {
+                    "collections": "covered",
+                    "points": "covered for memory workflows",
+                    "payload_indexes": "covered",
+                    "aliases": "read-only coverage",
+                    "snapshots": "admin coverage with exclusions for downloads/uploads",
+                    "cluster": "read-only collection cluster info",
+                    "service": "partially covered by qdrant-health-check and /health",
+                },
+                "excluded": [
+                    "Snapshot file download/upload endpoints are excluded to avoid returning binary payloads through MCP.",
+                    "Alias mutation endpoints are excluded until alias-switch workflows have explicit dry-run and confirmation UX.",
+                    "Cluster-wide service telemetry is excluded by default because it can be token-heavy and infrastructure-sensitive.",
+                ],
+            }
+            return finish_request(state, data)
+
+        async def get_tool_usage(
+            ctx: Context,
+            tool_name: Annotated[str, Field(description="Tool name to inspect.")],
+        ) -> dict[str, Any]:
+            state = new_request(ctx, {"tool_name": tool_name})
+            normalized_name = tool_name.strip()
+            if "." in normalized_name:
+                normalized_name = normalized_name.rsplit(".", maxsplit=1)[1]
+            if not self._tool_manager.has_tool(normalized_name):
+                raise ValueError(f"Unknown tool '{tool_name}'.")
+            tool = self._tool_manager.get_tool(normalized_name)
+            data = {
+                "name": normalized_name,
+                "description": tool.description,
+                "input_schema": tool.parameters,
+                "annotations": tool.annotations.model_dump()
+                if tool.annotations is not None
+                else None,
+                "guidance": (
+                    "For search tools, start with response_mode='compact' and top_k=3-5. "
+                    "Use response_mode='payload' only when the full document/payload is required."
+                )
+                if normalized_name in {"qdrant-find", "qdrant-recommend-memories"}
+                else None,
+            }
+            return finish_request(state, data)
+
         find_foo = find
         recommend_memories_foo = recommend_memories
         store_foo = store
@@ -7146,6 +7412,51 @@ class QdrantMCPServer(FastMCP):
             "qdrant-delete-by-filter",
             "qdrant-delete-document",
         }
+        navigation_tool_names = {
+            "qdrant-check-configuration",
+            "qdrant-list-capabilities",
+            "qdrant-get-endpoint-coverage",
+            "qdrant-get-tool-usage",
+        }
+        destructive_tool_names = {
+            "qdrant-delete-points",
+            "qdrant-delete-by-filter",
+            "qdrant-delete-document",
+            "qdrant-expire-memories",
+            "qdrant-expire-short-term",
+            "qdrant-merge-duplicates",
+            "qdrant-restore-snapshot",
+        }
+        mutation_tool_names = {
+            "qdrant-store",
+            "qdrant-cache-memory",
+            "qdrant-promote-short-term",
+            "qdrant-ingest-with-validation",
+            "qdrant-ingest-document",
+            "qdrant-ingest-textbook",
+            "qdrant-ensure-payload-indexes",
+            "qdrant-create-collection",
+            "qdrant-create-snapshot",
+            "qdrant-restore-snapshot",
+            "qdrant-backfill-memory-contract",
+            "qdrant-update-point",
+            "qdrant-patch-payload",
+            "qdrant-tag-memories",
+            "qdrant-link-memories",
+            "qdrant-reembed-points",
+            "qdrant-bulk-patch",
+            "qdrant-dedupe-memories",
+            "qdrant-merge-duplicates",
+            "qdrant-expire-memories",
+            "qdrant-expire-short-term",
+            "qdrant-update-optimizer-config",
+            "qdrant-delete-points",
+            "qdrant-delete-by-filter",
+            "qdrant-delete-document",
+            "qdrant-submit-job",
+            "qdrant-cancel-job",
+            "qdrant-cancel-ingest",
+        }
 
         def register_tool(
             tool_fn: Any,
@@ -7159,11 +7470,50 @@ class QdrantMCPServer(FastMCP):
                 and collection_required_tag not in final_description
             ):
                 final_description = f"{description} {collection_required_tag}"
+            read_only = name not in mutation_tool_names
+            destructive = name in destructive_tool_names
+            open_world = name not in navigation_tool_names
             self.tool(
                 tool_fn,
                 name=name,
                 description=final_description,
+                annotations=ToolAnnotations(
+                    title=name,
+                    readOnlyHint=read_only,
+                    destructiveHint=destructive,
+                    idempotentHint=True if read_only else None,
+                    openWorldHint=open_world,
+                ),
             )
+
+        register_tool(
+            check_configuration,
+            name="qdrant-check-configuration",
+            description=(
+                "Check Qdrant MCP configuration readiness without returning secrets."
+            ),
+        )
+        register_tool(
+            list_capabilities,
+            name="qdrant-list-capabilities",
+            description=(
+                "List Qdrant MCP capability groups and common agent workflows."
+            ),
+        )
+        register_tool(
+            get_endpoint_coverage,
+            name="qdrant-get-endpoint-coverage",
+            description=(
+                "Summarize Qdrant API endpoint coverage and documented exclusions."
+            ),
+        )
+        register_tool(
+            get_tool_usage,
+            name="qdrant-get-tool-usage",
+            description=(
+                "Explain when to use a Qdrant MCP tool, its inputs, annotations, and token-safe guidance."
+            ),
+        )
 
         register_tool(
             health_check,
@@ -7174,18 +7524,28 @@ class QdrantMCPServer(FastMCP):
         register_tool(
             find_foo,
             name="qdrant-find",
-            description=self.tool_settings.tool_find_description,
+            description=(
+                self.tool_settings.tool_find_description
+                + " Returns compact results by default; start with top_k=3-5 and filters, "
+                "then request response_mode='payload' only when full payloads are needed."
+            ),
         )
         if short_term_find_foo is not None:
             register_tool(
                 short_term_find_foo,
                 name="qdrant-find-short-term",
-                description="Search the short-term memory cache collection.",
+                description=(
+                    "Search the short-term memory cache collection. Returns compact "
+                    "results by default; start with top_k=3-5."
+                ),
             )
         register_tool(
             recommend_memories_foo,
             name="qdrant-recommend-memories",
-            description="Recommend memories using positive/negative example ids.",
+            description=(
+                "Recommend memories using positive/negative example ids. Returns compact "
+                "results by default; use response_mode='payload' only when full payloads are needed."
+            ),
         )
         register_tool(
             validate_memory_foo,

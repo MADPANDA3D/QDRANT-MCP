@@ -46,6 +46,7 @@ n8n setup:
 3. Set **Server transport** to **HTTP streamable**.
 4. Set **Auth** to **Multiple Headers Auth**.
 5. Add headers:
+   - `X-MADPANDA-PORTAL-GRANT`
    - `X-Qdrant-Url`
    - `X-Qdrant-Api-Key`
    - `X-Collection-Name` (optional)
@@ -90,8 +91,17 @@ pip install mad-mcp-qdrant
 ```bash
 docker build -t mcp-server-qdrant .
 docker run -d --name mcp-qdrant \
+  --restart unless-stopped \
+  --network mcp-network \
   --env-file .env \
-  mcp-server-qdrant mcp-server-qdrant --transport streamable-http
+  mcp-server-qdrant
+```
+
+Or use the hosted-standard compose file:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
 ```
 
 </details>
@@ -133,6 +143,13 @@ Prefer `mad-mcp-qdrant`; `mcp-server-qdrant` remains as a compatible alias.
 
 Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` preview for safer approvals.
 
+Search tools are token-safe by default. `qdrant-find`,
+`qdrant-find-short-term`, and `qdrant-recommend-memories` return compact
+results unless `response_mode="payload"` is requested. Start with `top_k=3-5`,
+add filters when possible, and increase detail only after selecting a specific
+result. For large content, prefer `qdrant-ingest-document` or
+`qdrant-ingest-textbook` instead of sending long text directly to store tools.
+
 <details>
 <summary>Core Memory Tools</summary>
 
@@ -159,6 +176,16 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 - `qdrant-list-points`: scroll point ids in a collection with filters.
 - `qdrant-get-points`: fetch points by id list with payload/vectors.
 - `qdrant-count-points`: count points that match optional filters.
+
+</details>
+
+<details>
+<summary>Agent Navigation</summary>
+
+- `qdrant-check-configuration`: check hosted readiness, accepted headers, cache settings, and missing configuration without returning secrets.
+- `qdrant-list-capabilities`: list compact capability groups and common workflows.
+- `qdrant-get-endpoint-coverage`: summarize Qdrant endpoint coverage and documented exclusions from `docs/endpoint-coverage.md`.
+- `qdrant-get-tool-usage`: inspect a tool schema, annotations, and token-safe usage guidance.
 
 </details>
 
@@ -228,11 +255,15 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 
 | Name                          | Description                                                         | Default Value                                                     |
 |-------------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
+| `MCP_PORTAL_GRANT_TOKEN`      | Required grant token for `/mcp` HTTP traffic from the MAD MCP Portal | unset                                                             |
 | `QDRANT_URL`                  | URL of the Qdrant server                                            | None                                                              |
 | `QDRANT_API_KEY`              | API key for the Qdrant server                                       | None                                                              |
 | `COLLECTION_NAME`             | Name of the default collection to use.                              | None                                                              |
 | `QDRANT_VECTOR_NAME`          | Override vector name used by the MCP server                         | None                                                              |
 | `QDRANT_LOCAL_PATH`           | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
+| `QDRANT_SEARCH_LIMIT`         | Default result limit when `top_k` is omitted                        | `10`                                                              |
+| `QDRANT_READ_ONLY`            | Hide mutating tools when enabled                                    | `false`                                                           |
+| `QDRANT_ALLOW_ARBITRARY_FILTER` | Allow raw Qdrant filter input                                      | `false`                                                           |
 | `EMBEDDING_PROVIDER`          | Embedding provider to use (`fastembed` or `openai`)                  | `fastembed`                                                       |
 | `EMBEDDING_MODEL`             | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
 | `EMBEDDING_VECTOR_SIZE`       | Vector size override (required for unknown OpenAI models)           | unset                                                             |
@@ -263,6 +294,8 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_TEXTBOOK_MAX_CONCURRENCY` | Max concurrent textbook embed/upsert workers                       | `2`                                                               |
 | `MCP_TEXTBOOK_JOB_STATE_DIR`  | Local directory used to persist async textbook job state            | `/tmp/mcp-server-qdrant/jobs`                                    |
 | `MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS` | Retention window for terminal persisted job state         | `168`                                                             |
+| `MCP_QUERY_EMBEDDING_CACHE_SIZE` | Max cached query embeddings; set `0` to disable                  | `256`                                                             |
+| `MCP_QUERY_EMBEDDING_CACHE_TTL_SECONDS` | Query embedding cache TTL seconds                         | `3600`                                                            |
 | `MCP_DEDUPE_ACTION`           | Dedupe behavior (`update` or `skip`)                                | `update`                                                          |
 | `MCP_INGEST_VALIDATION_MODE`  | Validation mode (`allow`, `reject`, `quarantine`)                   | `allow`                                                           |
 | `MCP_QUARANTINE_COLLECTION`   | Collection name for quarantined memories                            | `jarvis-quarantine`                                               |
@@ -276,6 +309,7 @@ Most mutating tools support `dry_run` + `confirm` and return a `dry_run_diff` pr
 | `MCP_REQUIRE_REQUEST_COLLECTION` | Require `X-Collection-Name` when overrides enabled              | `true`                                                            |
 | `MCP_DISABLE_DEFAULT_QDRANT_FALLBACK` | Disable server-side Qdrant fallback defaults                 | `false`                                                           |
 | `MCP_DISABLE_DEFAULT_EMBEDDING_FALLBACK` | Require embedding headers for all tools                     | `false`                                                           |
+| `MCP_PORTAL_GRANT_HEADER`      | Header name for the MAD MCP Portal grant token                     | `x-madpanda-portal-grant`                                         |
 | `MCP_QDRANT_URL_HEADER`        | Header name for Qdrant URL                                         | `x-qdrant-url`                                                    |
 | `MCP_QDRANT_API_KEY_HEADER`    | Header name for Qdrant API key                                     | `x-qdrant-api-key`                                                |
 | `MCP_COLLECTION_NAME_HEADER`   | Header name for collection name                                    | `x-collection-name`                                               |
@@ -298,6 +332,7 @@ Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same t
 Base (Qdrant + hosted overrides):
 
 ```bash
+MCP_PORTAL_GRANT_TOKEN=replace-with-shared-portal-token
 QDRANT_URL=https://your-qdrant-host:6333
 QDRANT_API_KEY=your-qdrant-api-key
 COLLECTION_NAME=
@@ -309,7 +344,9 @@ MCP_REQUIRE_REQUEST_QDRANT_API_KEY=true
 MCP_REQUIRE_REQUEST_COLLECTION=false
 MCP_DISABLE_DEFAULT_QDRANT_FALLBACK=true
 MCP_DISABLE_DEFAULT_EMBEDDING_FALLBACK=false
-MCP_QDRANT_HOST_ALLOWLIST=["*.qdrant.io"]
+MCP_QDRANT_HOST_ALLOWLIST=*.qdrant.io
+MCP_QUERY_EMBEDDING_CACHE_SIZE=256
+MCP_QUERY_EMBEDDING_CACHE_TTL_SECONDS=3600
 ```
 
 FastEmbed (local embeddings, no external API):
@@ -347,6 +384,7 @@ credentials (e.g., in n8n), enable per-request overrides and send headers.
 Server env:
 
 ```bash
+MCP_PORTAL_GRANT_TOKEN=replace-with-shared-portal-token
 MCP_ALLOW_REQUEST_OVERRIDES=true
 MCP_REQUIRE_REQUEST_QDRANT_URL=true
 MCP_REQUIRE_REQUEST_QDRANT_API_KEY=true
@@ -359,6 +397,7 @@ MCP_QDRANT_HOST_ALLOWLIST=*.qdrant.io
 
 Client headers (n8n MCP node):
 
+- `X-MADPANDA-PORTAL-GRANT`: shared portal grant token (required for `/mcp`)
 - `X-Qdrant-Url`: user Qdrant URL (required)
 - `X-Qdrant-Api-Key`: user Qdrant API key (required in strict hosted mode)
 - `X-Collection-Name`: user collection (optional; omit to work across collections)
@@ -373,6 +412,8 @@ Client headers (n8n MCP node):
 
 Behavior in hosted mode:
 
+- `/health` is public and secret-free.
+- `/mcp` fails closed before request override, Qdrant, or embedding headers are processed when `MCP_PORTAL_GRANT_TOKEN` is missing or `X-MADPANDA-PORTAL-GRANT` is absent/invalid.
 - Missing embedding headers puts the session into read-only mode.
 - Write/mutation tools are blocked until embedding headers are provided.
 - Semantic search tools (`qdrant-find`, `qdrant-find-short-term`) require embedding headers.

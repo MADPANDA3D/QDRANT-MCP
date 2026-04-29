@@ -15,15 +15,15 @@ Prereqs
 ```bash
 mkdir -p ~/qdrant-mcp
 cd ~/qdrant-mcp
-git clone https://github.com/qdrant/mcp-server-qdrant.git
+git clone https://github.com/MADPANDA3D/QDRANT-MCP.git mcp-server-qdrant
 cd mcp-server-qdrant
-docker build -t mcp-server-qdrant .
 ```
 
 2) Create .env (no quotes, one line per key)
 --------------------------------------------
 ```bash
 cat > .env <<'EOF'
+MCP_PORTAL_GRANT_TOKEN=REPLACE_WITH_SHARED_PORTAL_TOKEN
 QDRANT_URL=https://YOUR-QDRANT-ID.YOUR-REGION.cloud.qdrant.io:6333
 QDRANT_API_KEY=YOUR_API_KEY
 COLLECTION_NAME=jarvis-knowledge-base
@@ -44,18 +44,17 @@ EOF
 -----------------------------------
 ```bash
 docker rm -f mcp-qdrant 2>/dev/null
-docker run -d --name mcp-qdrant \
-  --network mcp-network \
-  --env-file .env \
-  mcp-server-qdrant \
-  mcp-server-qdrant --transport streamable-http
+docker network create mcp-network 2>/dev/null || true
+docker compose up -d --build
 ```
 
 Verify from inside NPM:
 ```bash
-docker exec -it npm_app_1 curl -i http://mcp-qdrant:8000/mcp/
+docker exec -it npm_app_1 curl -i http://mcp-qdrant:8000/health
+docker exec -it npm_app_1 curl -i http://mcp-qdrant:8000/mcp
 ```
-Expected: 406 Not Acceptable unless you send `Accept: text/event-stream`.
+Expected: `/health` returns public JSON. `/mcp` returns `401` unless the
+`X-MADPANDA-PORTAL-GRANT` header matches `MCP_PORTAL_GRANT_TOKEN`.
 
 3b) Optional auto-update with Watchtower (GHCR)
 -----------------------------------------------
@@ -67,8 +66,9 @@ docker rm -f mcp-qdrant 2>/dev/null
 docker run -d --name mcp-qdrant \
   --network mcp-network \
   --env-file .env \
+  --restart unless-stopped \
   --label com.centurylinklabs.watchtower.enable=true \
-  ghcr.io/<owner>/mad-mcp-qdrant:latest \
+  ghcr.io/madpanda3d/mad-mcp-qdrant:latest \
   mcp-server-qdrant --transport streamable-http
 
 docker run -d --name watchtower \
@@ -117,6 +117,7 @@ Initialize (creates a session):
 curl -i -X POST https://qdrant-mcp.yourdomain.com/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
+  -H "X-MADPANDA-PORTAL-GRANT: REPLACE_WITH_SHARED_PORTAL_TOKEN" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 ```
 
@@ -124,6 +125,7 @@ Use the `mcp-session-id` from the response:
 ```bash
 curl -i https://qdrant-mcp.yourdomain.com/mcp \
   -H "Accept: text/event-stream" \
+  -H "X-MADPANDA-PORTAL-GRANT: REPLACE_WITH_SHARED_PORTAL_TOKEN" \
   -H "mcp-session-id: <PASTE_ID_HERE>"
 ```
 
@@ -138,5 +140,8 @@ Notes
 -----
 - Canonical public endpoint is `/mcp` (no trailing slash).
 - Deprecated endpoint `/mcp/` should return `410 Gone` with a migration message.
+- `/health` is intentionally public and does not require or return secrets.
+- `/mcp` requires `X-MADPANDA-PORTAL-GRANT`; store the value only in `.env`
+  and client credential stores.
 - If you see `Bad Request: Missing session ID`, you need to run
   the initialize request first.

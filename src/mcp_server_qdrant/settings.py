@@ -1,8 +1,8 @@
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 
 from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
 
@@ -87,6 +87,13 @@ class EmbeddingProviderSettings(BaseSettings):
         default=None,
         validation_alias="EMBEDDING_VERSION",
     )
+
+    @field_validator("vector_size", mode="before")
+    @classmethod
+    def empty_vector_size_as_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
     @model_validator(mode="after")
     def check_openai_settings(self) -> "EmbeddingProviderSettings":
@@ -243,9 +250,17 @@ class RequestOverrideSettings(BaseSettings):
         default="x-openai-project",
         validation_alias="MCP_OPENAI_PROJECT_HEADER",
     )
-    qdrant_host_allowlist: list[str] = Field(
+    qdrant_host_allowlist: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         validation_alias="MCP_QDRANT_HOST_ALLOWLIST",
+    )
+    portal_grant_token: str | None = Field(
+        default=None,
+        validation_alias="MCP_PORTAL_GRANT_TOKEN",
+    )
+    portal_grant_header: str = Field(
+        default="x-madpanda-portal-grant",
+        validation_alias="MCP_PORTAL_GRANT_HEADER",
     )
 
     @field_validator("qdrant_host_allowlist", mode="before")
@@ -273,6 +288,7 @@ class RequestOverrideSettings(BaseSettings):
         self.openai_base_url_header = self.openai_base_url_header.lower()
         self.openai_organization_header = self.openai_organization_header.lower()
         self.openai_project_header = self.openai_project_header.lower()
+        self.portal_grant_header = self.portal_grant_header.lower()
         return self
 
 
@@ -363,6 +379,14 @@ class MemorySettings(BaseSettings):
         default=168,
         validation_alias="MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS",
     )
+    query_embedding_cache_size: int = Field(
+        default=256,
+        validation_alias="MCP_QUERY_EMBEDDING_CACHE_SIZE",
+    )
+    query_embedding_cache_ttl_seconds: int = Field(
+        default=3600,
+        validation_alias="MCP_QUERY_EMBEDDING_CACHE_TTL_SECONDS",
+    )
 
     @model_validator(mode="after")
     def validate_positive_limits(self) -> "MemorySettings":
@@ -391,4 +415,8 @@ class MemorySettings(BaseSettings):
             raise ValueError("textbook_ocr_max_page_ratio must be between 0 and 1.")
         if not self.textbook_job_state_dir.strip():
             raise ValueError("textbook_job_state_dir must be a non-empty path.")
+        if self.query_embedding_cache_size < 0:
+            raise ValueError("query_embedding_cache_size must be >= 0.")
+        if self.query_embedding_cache_ttl_seconds < 0:
+            raise ValueError("query_embedding_cache_ttl_seconds must be >= 0.")
         return self
