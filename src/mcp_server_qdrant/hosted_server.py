@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import hmac
+import os
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
+
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 try:  # FastMCP >= 2.2.11
     from fastmcp.server.dependencies import get_http_headers
@@ -26,6 +33,53 @@ from mcp_server_qdrant.settings import (
     RequestOverrideSettings,
     ToolSettings,
 )
+
+
+class PortalGrantMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: Any, *, grant_token: str | None, grant_header: str) -> None:
+        super().__init__(app)
+        self.grant_token = grant_token
+        self.grant_header = grant_header.lower()
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        if request.url.path.rstrip("/") == "/health":
+            return await call_next(request)
+
+        error = validate_portal_grant(
+            headers=request.headers,
+            expected_token=self.grant_token,
+            header_name=self.grant_header,
+        )
+        if error is not None:
+            status_code = 503 if error == "portal_grant_not_configured" else 401
+            return JSONResponse(
+                {
+                    "error": error,
+                    "message": "MAD MCP Portal grant validation failed.",
+                },
+                status_code=status_code,
+            )
+
+        return await call_next(request)
+
+
+def validate_portal_grant(
+    *,
+    headers: Mapping[str, Any],
+    expected_token: str | None,
+    header_name: str,
+) -> str | None:
+    expected = (expected_token or "").strip()
+    if not expected:
+        return "portal_grant_not_configured"
+    provided = str(headers.get(header_name, "")).strip()
+    if not provided:
+        return "missing_portal_grant"
+    if not hmac.compare_digest(provided, expected):
+        return "invalid_portal_grant"
+    return None
 
 
 class HostedQdrantMCPServer(QdrantMCPServer):
@@ -104,6 +158,7 @@ class HostedQdrantMCPServer(QdrantMCPServer):
             instructions=instructions,
             **settings,
         )
+        self._register_health_route()
 
         if self.request_override_settings.allow_request_overrides:
             self.qdrant_connector = QdrantConnector(
@@ -114,6 +169,57 @@ class HostedQdrantMCPServer(QdrantMCPServer):
                 self._default_vector_name,
                 self._default_local_path,
                 self.payload_indexes,
+            )
+
+    def http_app(
+        self,
+        path: str | None = None,
+        middleware: list[Middleware] | None = None,
+        transport: Literal["streamable-http", "sse"] = "streamable-http",
+    ) -> Any:
+        portal_middleware = Middleware(
+            PortalGrantMiddleware,
+            grant_token=self.request_override_settings.portal_grant_token,
+            grant_header=self.request_override_settings.portal_grant_header,
+        )
+        return super().http_app(
+            path=path,
+            middleware=[portal_middleware, *(middleware or [])],
+            transport=transport,
+        )
+
+    def _registered_tool_count(self) -> int:
+        manager = getattr(self, "_tool_manager", None)
+        for attr in ("_tools", "tools"):
+            tools = getattr(manager, attr, None)
+            if isinstance(tools, dict):
+                return len(tools)
+            if isinstance(tools, (list, tuple, set)):
+                return len(tools)
+        list_tools = getattr(manager, "list_tools", None)
+        if callable(list_tools):
+            try:
+                tools = list_tools()
+                if isinstance(tools, (list, tuple, set)):
+                    return len(tools)
+            except Exception:
+                pass
+        return 28
+
+    def _register_health_route(self) -> None:
+        tool_count = self._registered_tool_count
+
+        @self.custom_route("/health", methods=["GET"])
+        async def health(_: Request) -> JSONResponse:
+            count = tool_count()
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "service": "qdrant-mcp",
+                    "version": os.getenv("MCP_SERVER_VERSION", "dev"),
+                    "tool_count": count,
+                    "tools": {"total": count},
+                }
             )
 
     @property

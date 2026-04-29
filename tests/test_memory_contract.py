@@ -5,6 +5,7 @@ from mcp_server_qdrant.memory import (
     build_memory_backfill_patch,
     build_memory_filter,
     compute_text_hash,
+    default_memory_indexes,
     normalize_memory_input,
 )
 
@@ -137,6 +138,44 @@ def test_build_memory_filter_related_ids():
     assert warnings == []
     assert filt is not None
     assert filt.must[0].key.endswith(".related_ids")
+
+
+def test_build_memory_filter_school_fields():
+    warnings: list[str] = []
+    filt = build_memory_filter(
+        {
+            "class_code": "MUS327",
+            "subject": "World Music",
+            "module": "1",
+            "material_type": "lesson",
+            "title": "Module 1 Lesson 1",
+            "chapter": 2,
+        },
+        strict=False,
+        warnings=warnings,
+    )
+    assert warnings == []
+    assert filt is not None
+    keys = {condition.key for condition in filt.must}
+    assert "metadata.class" in keys
+    assert "metadata.subject" in keys
+    assert "metadata.module" in keys
+    assert "metadata.material_type" in keys
+    assert "metadata.title" in keys
+    assert "metadata.chapter" in keys
+
+
+def test_default_indexes_include_school_search_fields():
+    indexes = default_memory_indexes()
+    for field in (
+        "metadata.class",
+        "metadata.subject",
+        "metadata.module",
+        "metadata.material_type",
+        "metadata.title",
+        "metadata.chapter",
+    ):
+        assert field in indexes
 
 
 def test_backfill_patch_adds_missing_fields():

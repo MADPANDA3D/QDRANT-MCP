@@ -85,6 +85,12 @@ FILTER_FIELDS = {
     "doc_id",
     "doc_title",
     "class",
+    "class_code",
+    "course",
+    "subject",
+    "module",
+    "status",
+    "year",
     "material_type",
     "title",
     "author",
@@ -156,7 +162,7 @@ class MemoryInput(BaseModel):
 
 
 class MemoryFilterInput(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     type: str | None = Field(default=None, description="Filter by memory type.")
     entities: list[str] | str | None = Field(
@@ -170,6 +176,50 @@ class MemoryFilterInput(BaseModel):
     )
     scope: str | None = Field(default=None, description="Filter by scope.")
     source: str | None = Field(default=None, description="Filter by source.")
+    class_: str | None = Field(
+        default=None,
+        alias="class",
+        description="Filter by exact school course or class code, such as MUS327.",
+    )
+    class_code: str | None = Field(
+        default=None,
+        description="Alias for class; filter by exact school course or class code.",
+    )
+    course: str | None = Field(
+        default=None,
+        description="Alias for class; filter by exact school course or class code.",
+    )
+    subject: str | None = Field(default=None, description="Filter by subject.")
+    module: str | int | None = Field(
+        default=None, description="Filter by module number or label."
+    )
+    status: str | None = Field(default=None, description="Filter by material status.")
+    year: str | int | None = Field(default=None, description="Filter by material year.")
+    material_type: str | None = Field(
+        default=None, description="Filter by material type, such as textbook or lesson."
+    )
+    title: str | None = Field(default=None, description="Filter by exact title.")
+    author: str | None = Field(default=None, description="Filter by author.")
+    edition: str | None = Field(default=None, description="Filter by edition.")
+    isbn: str | None = Field(default=None, description="Filter by ISBN.")
+    publisher: str | None = Field(default=None, description="Filter by publisher.")
+    chapter: str | int | None = Field(
+        default=None, description="Filter by chapter number or label."
+    )
+    chapter_title: str | None = Field(
+        default=None, description="Filter by exact chapter title."
+    )
+    doc_id: str | None = Field(default=None, description="Filter by document id.")
+    doc_title: str | None = Field(default=None, description="Filter by document title.")
+    ingest_fingerprint: str | None = Field(
+        default=None, description="Filter by document ingest fingerprint."
+    )
+    source_url: str | None = Field(default=None, description="Filter by source URL.")
+    file_name: str | None = Field(default=None, description="Filter by file name.")
+    file_type: str | None = Field(default=None, description="Filter by file type.")
+    section_heading: str | None = Field(
+        default=None, description="Filter by section heading."
+    )
     created_at_from: Any | None = Field(
         default=None, description="Filter by creation time (start)."
     )
@@ -305,7 +355,7 @@ def _extract_raw_dict(memory: MemoryInput | dict[str, Any] | None) -> dict[str, 
     if memory is None:
         return {}
     if isinstance(memory, BaseModel):
-        return memory.model_dump(exclude_none=True)
+        return memory.model_dump(by_alias=True, exclude_none=True)
     return dict(memory)
 
 
@@ -602,6 +652,10 @@ def build_memory_filter(
         return None
 
     raw = _extract_raw_dict(memory_filter)
+    if raw.get("class_code") and not raw.get("class"):
+        raw["class"] = raw["class_code"]
+    if raw.get("course") and not raw.get("class"):
+        raw["class"] = raw["course"]
 
     extras = set(raw.keys()) - FILTER_FIELDS
     if extras:
@@ -628,6 +682,10 @@ def build_memory_filter(
     add_match("doc_id", raw.get("doc_id"))
     add_match("doc_title", raw.get("doc_title"))
     add_match("class", raw.get("class"))
+    add_match("subject", raw.get("subject"))
+    add_match("module", raw.get("module"))
+    add_match("status", raw.get("status"))
+    add_match("year", raw.get("year"))
     add_match("material_type", raw.get("material_type"))
     add_match("title", raw.get("title"))
     add_match("author", raw.get("author"))
@@ -756,6 +814,24 @@ def default_memory_indexes() -> dict[str, models.PayloadSchemaType]:
         f"{METADATA_PATH}.labels": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.related_ids": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.doc_id": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.class": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.subject": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.module": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.status": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.year": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.material_type": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.title": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.author": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.edition": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.isbn": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.publisher": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.chapter": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.chapter_title": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.ingest_fingerprint": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.source_url": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.file_name": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.file_type": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.section_heading": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.created_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.updated_at_ts": models.PayloadSchemaType.INTEGER,
         f"{METADATA_PATH}.expires_at_ts": models.PayloadSchemaType.INTEGER,

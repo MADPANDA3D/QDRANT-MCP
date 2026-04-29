@@ -1,8 +1,8 @@
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 
 from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
 
@@ -87,6 +87,13 @@ class EmbeddingProviderSettings(BaseSettings):
         default=None,
         validation_alias="EMBEDDING_VERSION",
     )
+
+    @field_validator("vector_size", mode="before")
+    @classmethod
+    def empty_vector_size_as_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
 
     @model_validator(mode="after")
     def check_openai_settings(self) -> "EmbeddingProviderSettings":
@@ -243,9 +250,17 @@ class RequestOverrideSettings(BaseSettings):
         default="x-openai-project",
         validation_alias="MCP_OPENAI_PROJECT_HEADER",
     )
-    qdrant_host_allowlist: list[str] = Field(
+    qdrant_host_allowlist: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         validation_alias="MCP_QDRANT_HOST_ALLOWLIST",
+    )
+    portal_grant_token: str | None = Field(
+        default=None,
+        validation_alias="MCP_PORTAL_GRANT_TOKEN",
+    )
+    portal_grant_header: str = Field(
+        default="x-madpanda-portal-grant",
+        validation_alias="MCP_PORTAL_GRANT_HEADER",
     )
 
     @field_validator("qdrant_host_allowlist", mode="before")
@@ -273,6 +288,7 @@ class RequestOverrideSettings(BaseSettings):
         self.openai_base_url_header = self.openai_base_url_header.lower()
         self.openai_organization_header = self.openai_organization_header.lower()
         self.openai_project_header = self.openai_project_header.lower()
+        self.portal_grant_header = self.portal_grant_header.lower()
         return self
 
 
@@ -303,6 +319,10 @@ class MemorySettings(BaseSettings):
         default="jarvis-short-term",
         validation_alias="MCP_SHORT_TERM_COLLECTION",
     )
+    study_collection: str = Field(
+        default="school",
+        validation_alias="MCP_STUDY_COLLECTION",
+    )
     short_term_ttl_days: int = Field(
         default=7,
         validation_alias="MCP_SHORT_TERM_TTL_DAYS",
@@ -323,21 +343,53 @@ class MemorySettings(BaseSettings):
         default=20_000,
         validation_alias="MCP_TEXTBOOK_MAX_CHUNKS",
     )
+    textbook_ocr_low_text_threshold_chars: int = Field(
+        default=120,
+        validation_alias="MCP_TEXTBOOK_OCR_LOW_TEXT_THRESHOLD_CHARS",
+    )
+    textbook_ocr_min_coverage_ratio: float = Field(
+        default=0.85,
+        validation_alias="MCP_TEXTBOOK_OCR_MIN_COVERAGE_RATIO",
+    )
+    textbook_ocr_max_pages: int = Field(
+        default=120,
+        validation_alias="MCP_TEXTBOOK_OCR_MAX_PAGES",
+    )
+    textbook_ocr_max_page_ratio: float = Field(
+        default=0.30,
+        validation_alias="MCP_TEXTBOOK_OCR_MAX_PAGE_RATIO",
+    )
     textbook_job_timeout_seconds: int = Field(
         default=45 * 60,
         validation_alias="MCP_TEXTBOOK_JOB_TIMEOUT_SECONDS",
     )
     textbook_embed_batch_size: int = Field(
-        default=64,
+        default=32,
         validation_alias="MCP_TEXTBOOK_EMBED_BATCH_SIZE",
     )
     textbook_upsert_batch_size: int = Field(
-        default=128,
+        default=64,
         validation_alias="MCP_TEXTBOOK_UPSERT_BATCH_SIZE",
     )
     textbook_max_concurrency: int = Field(
-        default=4,
+        default=2,
         validation_alias="MCP_TEXTBOOK_MAX_CONCURRENCY",
+    )
+    textbook_job_state_dir: str = Field(
+        default="/tmp/mcp-server-qdrant/jobs",
+        validation_alias="MCP_TEXTBOOK_JOB_STATE_DIR",
+    )
+    textbook_job_state_retention_hours: int = Field(
+        default=168,
+        validation_alias="MCP_TEXTBOOK_JOB_STATE_RETENTION_HOURS",
+    )
+    query_embedding_cache_size: int = Field(
+        default=256,
+        validation_alias="MCP_QUERY_EMBEDDING_CACHE_SIZE",
+    )
+    query_embedding_cache_ttl_seconds: int = Field(
+        default=3600,
+        validation_alias="MCP_QUERY_EMBEDDING_CACHE_TTL_SECONDS",
     )
 
     @model_validator(mode="after")
@@ -349,13 +401,28 @@ class MemorySettings(BaseSettings):
             "textbook_max_pages",
             "textbook_max_extracted_chars",
             "textbook_max_chunks",
+            "textbook_ocr_low_text_threshold_chars",
+            "textbook_ocr_max_pages",
             "textbook_job_timeout_seconds",
             "textbook_embed_batch_size",
             "textbook_upsert_batch_size",
             "textbook_max_concurrency",
+            "textbook_job_state_retention_hours",
         )
         for field_name in positive_fields:
             value = getattr(self, field_name)
             if value <= 0:
                 raise ValueError(f"{field_name} must be positive.")
+        if not (0 <= self.textbook_ocr_min_coverage_ratio <= 1):
+            raise ValueError("textbook_ocr_min_coverage_ratio must be between 0 and 1.")
+        if not (0 <= self.textbook_ocr_max_page_ratio <= 1):
+            raise ValueError("textbook_ocr_max_page_ratio must be between 0 and 1.")
+        if not self.textbook_job_state_dir.strip():
+            raise ValueError("textbook_job_state_dir must be a non-empty path.")
+        if not self.study_collection.strip():
+            raise ValueError("study_collection must be a non-empty collection name.")
+        if self.query_embedding_cache_size < 0:
+            raise ValueError("query_embedding_cache_size must be >= 0.")
+        if self.query_embedding_cache_ttl_seconds < 0:
+            raise ValueError("query_embedding_cache_ttl_seconds must be >= 0.")
         return self

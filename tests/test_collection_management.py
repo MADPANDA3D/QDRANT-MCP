@@ -43,7 +43,9 @@ def make_qdrant_server() -> QdrantMCPServer:
 def make_hosted_server() -> HostedQdrantMCPServer:
     server = HostedQdrantMCPServer(
         tool_settings=ToolSettings(),
-        qdrant_settings=QdrantSettings.model_validate({"QDRANT_LOCAL_PATH": ":memory:"}),
+        qdrant_settings=QdrantSettings.model_validate(
+            {"QDRANT_LOCAL_PATH": ":memory:"}
+        ),
         request_override_settings=RequestOverrideSettings(),
         memory_settings=MemorySettings(),
         embedding_provider=DummyEmbeddingProvider(),
