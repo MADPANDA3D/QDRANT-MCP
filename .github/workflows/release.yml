@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_OWNER_LOWER: ${{ github.repository_owner }}
+      HAS_GHCR_TOKEN: ${{ secrets.GHCR_TOKEN != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,11 +79,13 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and push GHCR image
+        id: ghcr_push
         if: steps.release_tag.outputs.tag != ''
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -91,3 +94,14 @@ jobs:
           tags: |
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mad-mcp-qdrant:${{ steps.release_tag.outputs.tag }}
             ghcr.io/${{ env.GH_OWNER_LOWER }}/mad-mcp-qdrant:latest
+
+      - name: Report optional GHCR publish failure
+        if: steps.release_tag.outputs.tag != '' && steps.ghcr_push.outcome == 'failure' && env.HAS_GHCR_TOKEN != 'true'
+        run: |
+          echo "::warning::GHCR publish failed with the default GITHUB_TOKEN. Set GHCR_TOKEN with write:packages to make container publishing required."
+
+      - name: Require GHCR publish when GHCR_TOKEN is configured
+        if: steps.release_tag.outputs.tag != '' && steps.ghcr_push.outcome == 'failure' && env.HAS_GHCR_TOKEN == 'true'
+        run: |
+          echo "GHCR publish failed even though GHCR_TOKEN is configured."
+          exit 1
