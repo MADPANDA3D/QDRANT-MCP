@@ -13,6 +13,7 @@ from starlette.testclient import TestClient
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant.hosted_server import PortalGrantMiddleware, validate_portal_grant
 from mcp_server_qdrant.mcp_server import QdrantMCPServer
+from mcp_server_qdrant.memory import MemoryFilterInput
 from mcp_server_qdrant.settings import (
     METADATA_PATH,
     EmbeddingProviderSettings,
@@ -107,6 +108,134 @@ class FakeSearchConnector:
             models.Record(id=point_id, payload=None, vector=[0.1, 0.2, 0.3])
             for point_id in point_ids
         ]
+
+
+class FakeContextConnector(FakeSearchConnector):
+    def __init__(self, *, empty_filtered: bool = True) -> None:
+        super().__init__()
+        self.empty_filtered = empty_filtered
+        self.payloads = [
+            {
+                "document": "First document chunk about the user's CRM plan. " * 20,
+                METADATA_PATH: {
+                    "title": "CRM Operating Plan",
+                    "doc_id": "doc-1",
+                    "source_url": "https://example.test/crm",
+                    "status": "active",
+                    "type": "note",
+                },
+            },
+            {
+                "document": "Second chunk from the same CRM operating plan. " * 20,
+                METADATA_PATH: {
+                    "title": "CRM Operating Plan",
+                    "doc_id": "doc-1",
+                    "source_url": "https://example.test/crm",
+                    "status": "active",
+                    "type": "note",
+                },
+            },
+            {
+                "document": "Separate brand memory about positioning and offers. " * 20,
+                METADATA_PATH: {
+                    "title": "Brand Positioning",
+                    "doc_id": "doc-2",
+                    "source_url": "https://example.test/brand",
+                    "status": "active",
+                    "type": "note",
+                },
+            },
+        ]
+
+    async def query_points(
+        self,
+        query_vector: list[float],
+        *,
+        collection_name: str | None = None,
+        limit: int = 10,
+        query_filter: models.Filter | None = None,
+        with_vectors: bool = False,
+    ) -> list[models.ScoredPoint]:
+        self.query_calls += 1
+        self.query_vectors.append(query_vector)
+        self.collection_names.append(collection_name)
+        self.query_filters.append(query_filter)
+        if query_filter is not None and self.empty_filtered:
+            return []
+        points = []
+        for index, payload in enumerate(self.payloads[:limit], start=1):
+            points.append(
+                models.ScoredPoint(
+                    id=f"context-{index}",
+                    version=1,
+                    score=0.99 - (index / 100),
+                    payload=payload,
+                    vector=[0.1, 0.2, 0.3] if with_vectors else None,
+                )
+            )
+        return points
+
+
+class FakeSchemaConnector(FakeSearchConnector):
+    async def get_collection_summary(
+        self, collection_name: str | None = None
+    ) -> dict[str, Any]:
+        return {
+            "status": "green",
+            "optimizer_status": "ok",
+            "points_count": 3,
+            "vectors": {"text": {"size": 3, "distance": "Cosine"}},
+            "payload_schema": await self.get_collection_payload_schema(
+                collection_name or "memories"
+            ),
+        }
+
+    async def get_collection_payload_schema(
+        self, collection_name: str | None = None
+    ) -> dict[str, str]:
+        return {
+            "metadata.class": "keyword",
+            "metadata.module": "keyword",
+            "metadata.status": "keyword",
+            "metadata.title": "keyword",
+            "metadata.doc_id": "keyword",
+        }
+
+    async def scroll_points_page(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+        limit: int = 10,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+        offset: Any | None = None,
+    ) -> tuple[list[models.Record], Any | None]:
+        payloads = [
+            {
+                METADATA_PATH: {
+                    "class": "MUS327",
+                    "module": "1",
+                    "status": "active",
+                    "title": "Music Module 1",
+                    "doc_id": "music-1",
+                }
+            },
+            {
+                METADATA_PATH: {
+                    "class": "ILR260",
+                    "module": "2",
+                    "status": "archived",
+                    "title": "Labor Relations Module 2",
+                    "doc_id": "labor-2",
+                }
+            },
+        ]
+        records = [
+            models.Record(id=f"sample-{index}", payload=payload, vector=None)
+            for index, payload in enumerate(payloads[:limit], start=1)
+        ]
+        return records, None
 
 
 class FakeHealthConnector:
@@ -333,6 +462,74 @@ async def test_study_search_defaults_to_school_collection_and_compact_filters() 
 
 
 @pytest.mark.asyncio
+async def test_find_supports_metadata_fields_grouping_and_budget() -> None:
+    server, _ = make_server()
+    connector = FakeContextConnector(empty_filtered=False)
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        connector,
+    )
+    find_tool = server._tool_manager.get_tool("qdrant-find")
+
+    response = await find_tool.fn(
+        SimpleNamespace(request_id="find-shape-test"),
+        query="crm operating plan",
+        top_k=3,
+        metadata_fields=["title", "doc_id"],
+        group_by_doc=True,
+        max_chunks_per_doc=1,
+        max_output_chars=1600,
+    )
+
+    results = response["data"]["results"]
+    assert len(results) == 2
+    assert [result["metadata"]["doc_id"] for result in results] == ["doc-1", "doc-2"]
+    assert set(results[0]["metadata"].keys()) == {"title", "doc_id"}
+    assert "payload" not in results[0]
+    assert response["meta"]["budget"]["max_output_chars"] == 1600
+
+
+@pytest.mark.asyncio
+async def test_build_context_relaxes_filters_dedupes_and_returns_citations() -> None:
+    server, provider = make_server()
+    connector = FakeContextConnector(empty_filtered=True)
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        connector,
+    )
+    context_tool = server._tool_manager.get_tool("qdrant-build-context")
+
+    response = await context_tool.fn(
+        SimpleNamespace(request_id="context-test"),
+        query="crm operating plan",
+        memory_filter=MemoryFilterInput.model_validate({"status": "missing"}),
+        top_k=3,
+        metadata_fields=["title", "doc_id", "source_url"],
+        group_by_doc=True,
+        max_chunks_per_doc=1,
+        max_output_chars=4000,
+    )
+
+    data = response["data"]
+    assert data["fallback_used"] is True
+    assert [attempt["strategy"] for attempt in data["search_attempts"]] == [
+        "primary",
+        "relax_filters",
+    ]
+    assert len(data["context"]) == 2
+    assert data["context"][0]["citation"] == "[1]"
+    assert "[1] CRM Operating Plan" in data["context_text"]
+    assert {item["metadata"]["doc_id"] for item in data["context"]} == {
+        "doc-1",
+        "doc-2",
+    }
+    assert "payload" not in data["context"][0]
+    assert provider.query_calls == 1
+    assert connector.query_calls == 2
+    assert response["meta"]["budget"]["max_output_chars"] == 4000
+
+
+@pytest.mark.asyncio
 async def test_recommend_memories_compact_default_excludes_payload() -> None:
     server, _ = make_server()
     connector = FakeSearchConnector()
@@ -382,10 +579,45 @@ async def test_navigation_tools_return_stable_compact_outputs() -> None:
 
     usage = await server._tool_manager.get_tool(  # pylint: disable=protected-access
         "qdrant-get-tool-usage"
-    ).fn(ctx, tool_name="qdrant-find")
-    assert usage["data"]["name"] == "qdrant-find"
+    ).fn(ctx, tool_name="qdrant-build-context")
+    assert usage["data"]["name"] == "qdrant-build-context"
     assert usage["data"]["annotations"]["readOnlyHint"] is True
     assert "top_k=3-5" in usage["data"]["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_collection_navigation_describes_schema_and_suggests_filters() -> None:
+    server, _ = make_server()
+    connector = FakeSchemaConnector()
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        connector,
+    )
+    ctx = SimpleNamespace(request_id="collection-navigation-test")
+
+    describe = await server._tool_manager.get_tool(  # pylint: disable=protected-access
+        "qdrant-describe-collection"
+    ).fn(ctx)
+    assert describe["data"]["collection_name"] == "memories"
+    assert describe["data"]["points_count"] == 3
+    assert "class" in describe["data"]["known_memory_filter_fields"]
+
+    schema = await server._tool_manager.get_tool(  # pylint: disable=protected-access
+        "qdrant-summarize-collection-schema"
+    ).fn(ctx)
+    assert schema["data"]["memory_filter_keys"]["class"] == "class_code"
+    assert "metadata.status" in schema["data"]["indexed_fields"]
+
+    suggested = await server._tool_manager.get_tool(  # pylint: disable=protected-access
+        "qdrant-suggest-filters"
+    ).fn(ctx, query="Need MUS327 module 1 active context")
+    assert suggested["data"]["recommended_filters"] == {
+        "class_code": "MUS327",
+        "module": "1",
+        "status": "active",
+    }
+    field_names = {field["field"] for field in suggested["data"]["fields"]}
+    assert {"class", "module", "status"}.issubset(field_names)
 
 
 @pytest.mark.asyncio

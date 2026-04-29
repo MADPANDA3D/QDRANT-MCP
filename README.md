@@ -147,11 +147,14 @@ Search tools are token-safe by default. `qdrant-find`,
 `qdrant-find-short-term`, and `qdrant-recommend-memories` return compact
 results unless `response_mode="payload"` is requested. Start with `top_k=3-5`,
 add filters when possible, and increase detail only after selecting a specific
-result. For large content, prefer `qdrant-ingest-document` or
-`qdrant-ingest-textbook` instead of sending long text directly to store tools.
-For school work, start with `qdrant-study-search`; it defaults to the
-`MCP_STUDY_COLLECTION` collection and exposes course, subject, material type,
-module, week, status, title, author, document, and chapter filters directly.
+result. Use `metadata_fields`, `group_by_doc`, `max_chunks_per_doc`,
+`min_score`, and `max_output_chars` when an agent needs tighter result shaping.
+For second-brain workflows, prefer `qdrant-build-context`: it returns a compact,
+cited context pack with a response budget, document dedupe, optional filters, and
+a safe relax-filters fallback before an agent spends more calls. For large
+content, prefer `qdrant-ingest-document` or `qdrant-ingest-textbook` instead of
+sending long text directly to store tools. For school work, `qdrant-study-search`
+remains a convenience profile for the `MCP_STUDY_COLLECTION` collection.
 
 <details>
 <summary>Core Memory Tools</summary>
@@ -169,6 +172,7 @@ module, week, status, title, author, document, and chapter filters directly.
   - Uses streaming download + page-wise extraction to reduce memory pressure.
   - With `ocr=true`, applies OCR coverage-gating (blank/low-text pages first) and fails fast if target coverage cannot be met within budget.
   - Job status is persisted on disk so restart scenarios return structured failure instead of `Job not found`.
+- `qdrant-build-context`: build a collection-agnostic, token-budgeted context pack with cited snippets, document/source dedupe, optional exact filters, and relax-filters fallback.
 - `qdrant-study-search`: search school/study materials with compact output and direct course/week/module/material filters.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
@@ -190,6 +194,9 @@ module, week, status, title, author, document, and chapter filters directly.
 - `qdrant-list-capabilities`: list compact capability groups and common workflows.
 - `qdrant-get-endpoint-coverage`: summarize Qdrant endpoint coverage and documented exclusions from `docs/endpoint-coverage.md`.
 - `qdrant-get-tool-usage`: inspect a tool schema, annotations, and token-safe usage guidance.
+- `qdrant-describe-collection`: summarize collection size, vectors, indexed fields, and useful retrieval tools.
+- `qdrant-summarize-collection-schema`: map indexed payload fields to supported `memory_filter` keys.
+- `qdrant-suggest-filters`: sample indexed metadata values and suggest exact filters for cleaner semantic retrieval.
 
 </details>
 

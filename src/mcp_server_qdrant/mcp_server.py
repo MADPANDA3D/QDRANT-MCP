@@ -57,6 +57,7 @@ from mcp_server_qdrant.memory import (
     DEFAULT_MEMORY_TYPE,
     DEFAULT_SCOPE,
     DEFAULT_SOURCE,
+    FILTER_FIELDS,
     REQUIRED_FIELDS,
     EmbeddingInfo,
     MemoryFilterInput,
@@ -537,6 +538,12 @@ class QdrantMCPServer(FastMCP):
                 return cleaned
             return cleaned[: max_length - 3] + "..."
 
+        def safe_json_size(value: Any) -> int:
+            try:
+                return len(json.dumps(value, default=str).encode("utf-8"))
+            except TypeError:
+                return 0
+
         DRY_RUN_PREVIEW_LIMIT = 5
         DRY_RUN_GROUP_FIELDS = ("scope", "type", "labels", "source", "doc_id")
         SEARCH_COMPACT_METADATA_FIELDS = (
@@ -562,6 +569,29 @@ class QdrantMCPServer(FastMCP):
             "page_start",
             "page_end",
             "section_heading",
+        )
+        CONTEXT_METADATA_FIELDS = (
+            "type",
+            "class",
+            "subject",
+            "module",
+            "week",
+            "status",
+            "year",
+            "material_type",
+            "title",
+            "doc_title",
+            "author",
+            "doc_id",
+            "source_url",
+            "file_name",
+            "file_type",
+            "chapter",
+            "chapter_title",
+            "page_start",
+            "page_end",
+            "section_heading",
+            "labels",
         )
         DRY_RUN_PREVIEW_FIELDS = (
             "text",
@@ -643,11 +673,111 @@ class QdrantMCPServer(FastMCP):
         def clamp_snippet_chars(value: int) -> int:
             return max(40, min(value, 1200))
 
+        def clamp_max_output_chars(value: int | None) -> int | None:
+            if value is None:
+                return None
+            return max(800, min(value, 50000))
+
+        def normalize_metadata_fields(
+            fields: list[str] | tuple[str, ...] | None,
+        ) -> tuple[str, ...] | None:
+            if not fields:
+                return None
+            normalized: list[str] = []
+            for raw_field in fields:
+                if not isinstance(raw_field, str):
+                    continue
+                field = raw_field.strip()
+                if not field:
+                    continue
+                if field.startswith(f"{METADATA_PATH}."):
+                    field = field.removeprefix(f"{METADATA_PATH}.")
+                if field not in normalized:
+                    normalized.append(field)
+                if len(normalized) >= 40:
+                    break
+            return tuple(normalized) if normalized else None
+
+        def point_group_key(point: models.ScoredPoint) -> str:
+            metadata = extract_metadata(point.payload or {})
+            for key in (
+                "doc_id",
+                "doc_title",
+                "title",
+                "source_url",
+                "file_name",
+                "text_hash",
+            ):
+                value = metadata.get(key)
+                if value is not None and str(value).strip():
+                    return f"{key}:{value}"
+            return f"id:{point.id}"
+
+        def select_points_for_output(
+            points: list[models.ScoredPoint],
+            *,
+            limit: int,
+            group_by_doc: bool,
+            max_chunks_per_doc: int,
+            min_score: float | None,
+        ) -> list[models.ScoredPoint]:
+            if limit <= 0:
+                return []
+            selected: list[models.ScoredPoint] = []
+            group_counts: dict[str, int] = {}
+            chunk_limit = max(1, max_chunks_per_doc)
+            for point in points:
+                if min_score is not None and point.score < min_score:
+                    continue
+                if group_by_doc:
+                    group_key = point_group_key(point)
+                    current_count = group_counts.get(group_key, 0)
+                    if current_count >= chunk_limit:
+                        continue
+                    group_counts[group_key] = current_count + 1
+                selected.append(point)
+                if len(selected) >= limit:
+                    break
+            return selected
+
+        def trim_results_to_budget(
+            results: list[dict[str, Any]],
+            *,
+            base_data: dict[str, Any],
+            max_output_chars: int | None,
+        ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+            budget = clamp_max_output_chars(max_output_chars)
+            if budget is None:
+                estimated = safe_json_size({**base_data, "results": results})
+                return results, {
+                    "max_output_chars": None,
+                    "estimated_output_chars": estimated,
+                    "truncated": False,
+                }
+
+            kept: list[dict[str, Any]] = []
+            for result in results:
+                candidate = [*kept, result]
+                estimated = safe_json_size({**base_data, "results": candidate})
+                if estimated <= budget or not kept:
+                    kept = candidate
+                    continue
+                break
+
+            return kept, {
+                "max_output_chars": budget,
+                "estimated_output_chars": safe_json_size(
+                    {**base_data, "results": kept}
+                ),
+                "truncated": len(kept) < len(results),
+            }
+
         def format_search_result(
             point: models.ScoredPoint,
             *,
             response_mode: str,
             snippet_chars: int,
+            metadata_fields: tuple[str, ...] | None = None,
         ) -> dict[str, Any]:
             payload = point.payload or {}
             metadata = extract_metadata(payload)
@@ -658,11 +788,13 @@ class QdrantMCPServer(FastMCP):
                 "snippet": make_snippet(text, max_length=snippet_chars),
             }
             if response_mode == "compact":
-                selected = compact_metadata(metadata, SEARCH_COMPACT_METADATA_FIELDS)
+                selected = compact_metadata(
+                    metadata, metadata_fields or SEARCH_COMPACT_METADATA_FIELDS
+                )
                 if selected:
                     result["metadata"] = selected
             elif response_mode == "metadata":
-                result["metadata"] = compact_metadata(metadata)
+                result["metadata"] = compact_metadata(metadata, metadata_fields)
             elif response_mode == "payload":
                 result["payload"] = payload
             else:
@@ -670,6 +802,106 @@ class QdrantMCPServer(FastMCP):
                     "response_mode must be one of: compact, metadata, payload."
                 )
             return result
+
+        def metadata_value_from_payload(
+            payload: dict[str, Any], field_name: str
+        ) -> Any:
+            field = field_name.strip()
+            if field.startswith(f"{METADATA_PATH}."):
+                field = field.removeprefix(f"{METADATA_PATH}.")
+            metadata = extract_metadata(payload)
+            if field in metadata:
+                return metadata[field]
+            if field in payload:
+                return payload[field]
+            return None
+
+        def add_sample_value(
+            samples: dict[str, list[Any]],
+            field_name: str,
+            value: Any,
+            *,
+            max_values: int,
+        ) -> None:
+            if value is None:
+                return
+            values = value if isinstance(value, list) else [value]
+            existing = samples.setdefault(field_name, [])
+            seen = {str(item).lower() for item in existing}
+            for item in values:
+                if item is None:
+                    continue
+                compacted = compact_value(item)
+                key = str(compacted).strip().lower()
+                if not key or key in seen:
+                    continue
+                existing.append(compacted)
+                seen.add(key)
+                if len(existing) >= max_values:
+                    break
+
+        def memory_filter_key_for_field(field_name: str) -> str:
+            if field_name == "class":
+                return "class_code"
+            return field_name
+
+        def build_context_text(items: list[dict[str, Any]]) -> str:
+            lines: list[str] = []
+            for item in items:
+                metadata = item.get("metadata") or {}
+                title = (
+                    metadata.get("title")
+                    or metadata.get("doc_title")
+                    or metadata.get("file_name")
+                    or metadata.get("source_url")
+                    or item.get("id")
+                )
+                score = item.get("score")
+                score_text = f" score={score:.4f}" if isinstance(score, float) else ""
+                lines.append(
+                    f"{item['citation']} {title} ({item['id']}{score_text})\n"
+                    f"{item.get('snippet', '')}"
+                )
+            return "\n\n".join(lines)
+
+        def trim_context_to_budget(
+            items: list[dict[str, Any]],
+            *,
+            base_data: dict[str, Any],
+            max_output_chars: int,
+        ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+            budget = clamp_max_output_chars(max_output_chars) or 4000
+            kept: list[dict[str, Any]] = []
+            context_text = ""
+            for item in items:
+                candidate = [*kept, item]
+                candidate_text = build_context_text(candidate)
+                estimated_data = {
+                    **base_data,
+                    "context": candidate,
+                    "context_text": candidate_text,
+                }
+                estimated = safe_json_size(estimated_data)
+                if estimated <= budget or not kept:
+                    kept = candidate
+                    context_text = candidate_text
+                    continue
+                break
+            return (
+                kept,
+                context_text,
+                {
+                    "max_output_chars": budget,
+                    "estimated_output_chars": safe_json_size(
+                        {
+                            **base_data,
+                            "context": kept,
+                            "context_text": context_text,
+                        }
+                    ),
+                    "truncated": len(kept) < len(items),
+                },
+            )
 
         def build_structured_error_payload(
             *,
@@ -2396,6 +2628,42 @@ class QdrantMCPServer(FastMCP):
                     description="Max snippet length in characters, clamped to 40-1200."
                 ),
             ] = 240,
+            max_output_chars: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "Optional approximate response budget. When set, results are "
+                        "trimmed to fit 800-50000 characters."
+                    )
+                ),
+            ] = None,
+            metadata_fields: Annotated[
+                list[str] | None,
+                Field(
+                    description=(
+                        "Optional metadata field allowlist for compact/metadata modes, "
+                        "for example ['title','doc_id','source_url']."
+                    )
+                ),
+            ] = None,
+            group_by_doc: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "When true, limit repeated chunks from the same doc/title/source."
+                    )
+                ),
+            ] = False,
+            max_chunks_per_doc: Annotated[
+                int,
+                Field(description="Max chunks per document when group_by_doc=true."),
+            ] = 2,
+            min_score: Annotated[
+                float | None,
+                Field(
+                    description="Optional minimum similarity score for returned hits."
+                ),
+            ] = None,
             use_mmr: Annotated[
                 bool, Field(description="Enable MMR for diverse retrieval.")
             ] = False,
@@ -2414,6 +2682,11 @@ class QdrantMCPServer(FastMCP):
                     "top_k": top_k,
                     "response_mode": response_mode,
                     "snippet_chars": snippet_chars,
+                    "max_output_chars": max_output_chars,
+                    "metadata_fields": metadata_fields,
+                    "group_by_doc": group_by_doc,
+                    "max_chunks_per_doc": max_chunks_per_doc,
+                    "min_score": min_score,
                     "use_mmr": use_mmr,
                     "mmr_lambda": mmr_lambda,
                 },
@@ -2439,7 +2712,13 @@ class QdrantMCPServer(FastMCP):
             limit = top_k or self.qdrant_settings.search_limit
             if limit <= 0:
                 raise ValueError("top_k must be positive.")
+            if max_chunks_per_doc <= 0:
+                raise ValueError("max_chunks_per_doc must be positive.")
             snippet_chars = clamp_snippet_chars(snippet_chars)
+            selected_metadata_fields = normalize_metadata_fields(metadata_fields)
+            candidate_limit = limit
+            if group_by_doc or min_score is not None:
+                candidate_limit = min(max(limit * 3, limit), 100)
 
             collection = resolve_collection_name(collection_name)
             filter_applied = combined_filter is not None
@@ -2457,7 +2736,7 @@ class QdrantMCPServer(FastMCP):
                 vector_name = await self.qdrant_connector.resolve_vector_name(
                     collection
                 )
-                candidate_limit = min(max(limit * 4, limit), 100)
+                candidate_limit = min(max(candidate_limit, limit * 4), 100)
                 points = await self.qdrant_connector.query_points(
                     query_vector,
                     collection_name=collection,
@@ -2468,7 +2747,7 @@ class QdrantMCPServer(FastMCP):
                 selected = mmr_select(
                     query_vector,
                     points,
-                    top_k=limit,
+                    top_k=candidate_limit,
                     lambda_mult=mmr_lambda,
                     vector_name=vector_name,
                 )
@@ -2481,10 +2760,17 @@ class QdrantMCPServer(FastMCP):
                 points = await self.qdrant_connector.query_points(
                     query_vector,
                     collection_name=collection,
-                    limit=limit,
+                    limit=candidate_limit,
                     query_filter=combined_filter,
                 )
 
+            points = select_points_for_output(
+                points,
+                limit=limit,
+                group_by_doc=group_by_doc,
+                max_chunks_per_doc=max_chunks_per_doc,
+                min_score=min_score,
+            )
             results = []
             for point in points:
                 results.append(
@@ -2492,20 +2778,32 @@ class QdrantMCPServer(FastMCP):
                         point,
                         response_mode=response_mode,
                         snippet_chars=snippet_chars,
+                        metadata_fields=selected_metadata_fields,
                     )
                 )
 
-            data = {
+            base_data: dict[str, Any] = {
                 "query": query,
                 "collection_name": collection,
-                "results": results,
             }
+            results, budget = trim_results_to_budget(
+                results,
+                base_data=base_data,
+                max_output_chars=max_output_chars,
+            )
+            data = {**base_data, "results": results}
             extra_meta = {
                 "top_k": limit,
+                "candidate_limit": candidate_limit,
                 "filter_applied": filter_applied,
                 "query_vector_dim": query_vector_dim,
                 "mmr": use_mmr,
                 "response_mode": response_mode,
+                "metadata_fields": selected_metadata_fields,
+                "group_by_doc": group_by_doc,
+                "max_chunks_per_doc": max_chunks_per_doc if group_by_doc else None,
+                "min_score": min_score,
+                "budget": budget,
             }
             return finish_request(state, data, extra_meta=extra_meta)
 
@@ -2593,6 +2891,35 @@ class QdrantMCPServer(FastMCP):
                     description="Max snippet length in characters, clamped to 40-1200."
                 ),
             ] = 320,
+            max_output_chars: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "Optional approximate response budget. When set, results are "
+                        "trimmed to fit 800-50000 characters."
+                    )
+                ),
+            ] = None,
+            metadata_fields: Annotated[
+                list[str] | None,
+                Field(
+                    description="Optional metadata field allowlist for compact output."
+                ),
+            ] = None,
+            group_by_doc: Annotated[
+                bool,
+                Field(description="Limit repeated chunks from the same document."),
+            ] = False,
+            max_chunks_per_doc: Annotated[
+                int,
+                Field(description="Max chunks per document when group_by_doc=true."),
+            ] = 2,
+            min_score: Annotated[
+                float | None,
+                Field(
+                    description="Optional minimum similarity score for returned hits."
+                ),
+            ] = None,
             use_mmr: Annotated[
                 bool,
                 Field(description="Enable MMR for diverse study retrieval."),
@@ -2629,8 +2956,255 @@ class QdrantMCPServer(FastMCP):
                 top_k=top_k,
                 response_mode=response_mode,
                 snippet_chars=snippet_chars,
+                max_output_chars=max_output_chars,
+                metadata_fields=metadata_fields,
+                group_by_doc=group_by_doc,
+                max_chunks_per_doc=max_chunks_per_doc,
+                min_score=min_score,
                 use_mmr=use_mmr,
             )
+
+        async def build_context(
+            ctx: Context,
+            query: Annotated[
+                str,
+                Field(
+                    description=(
+                        "Task, question, or search phrase to build a compact context pack for."
+                    )
+                ),
+            ],
+            collection_name: Annotated[
+                str | None,
+                Field(description="Collection to search for second-brain context."),
+            ] = None,
+            memory_filter: Annotated[
+                MemoryFilterInput | None,
+                Field(description="Structured exact filters to apply before fallback."),
+            ] = None,
+            query_filter: ArbitraryFilter | None = None,
+            top_k: Annotated[
+                int,
+                Field(description="Max cited context items to return. Start with 3-5."),
+            ] = 5,
+            candidate_k: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "Candidate hits to inspect before dedupe. Defaults to top_k*3 "
+                        "when grouping by document."
+                    )
+                ),
+            ] = None,
+            max_output_chars: Annotated[
+                int,
+                Field(
+                    description=(
+                        "Approximate response budget for the packed context, clamped "
+                        "to 800-50000 characters."
+                    )
+                ),
+            ] = 4000,
+            snippet_chars: Annotated[
+                int,
+                Field(description="Max characters per snippet, clamped to 40-1200."),
+            ] = 360,
+            metadata_fields: Annotated[
+                list[str] | None,
+                Field(
+                    description=(
+                        "Metadata fields to include. Defaults to citation-friendly "
+                        "identity, document, source, and section fields."
+                    )
+                ),
+            ] = None,
+            group_by_doc: Annotated[
+                bool,
+                Field(
+                    description="Avoid repeated chunks from the same document/source."
+                ),
+            ] = True,
+            max_chunks_per_doc: Annotated[
+                int,
+                Field(description="Max chunks per document/source when grouping."),
+            ] = 2,
+            min_score: Annotated[
+                float | None,
+                Field(description="Optional minimum similarity score."),
+            ] = None,
+            fallback_strategy: Annotated[
+                Literal["none", "relax_filters"],
+                Field(
+                    description=(
+                        "Fallback behavior when filtered search returns no context. "
+                        "relax_filters retries the same query without exact filters."
+                    )
+                ),
+            ] = "relax_filters",
+            use_mmr: Annotated[
+                bool,
+                Field(description="Enable MMR diversity for the candidate set."),
+            ] = False,
+            mmr_lambda: Annotated[
+                float,
+                Field(description="MMR trade-off between relevance and diversity."),
+            ] = 0.5,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "query": query,
+                    "collection_name": collection_name,
+                    "memory_filter": memory_filter,
+                    "query_filter": query_filter,
+                    "top_k": top_k,
+                    "candidate_k": candidate_k,
+                    "max_output_chars": max_output_chars,
+                    "snippet_chars": snippet_chars,
+                    "metadata_fields": metadata_fields,
+                    "group_by_doc": group_by_doc,
+                    "max_chunks_per_doc": max_chunks_per_doc,
+                    "min_score": min_score,
+                    "fallback_strategy": fallback_strategy,
+                    "use_mmr": use_mmr,
+                    "mmr_lambda": mmr_lambda,
+                },
+            )
+            if top_k <= 0:
+                raise ValueError("top_k must be positive.")
+            if candidate_k is not None and candidate_k <= 0:
+                raise ValueError("candidate_k must be positive when provided.")
+            if max_chunks_per_doc <= 0:
+                raise ValueError("max_chunks_per_doc must be positive.")
+            if fallback_strategy not in {"none", "relax_filters"}:
+                raise ValueError("fallback_strategy must be none or relax_filters.")
+            if mmr_lambda < 0 or mmr_lambda > 1:
+                if self.memory_settings.strict_params:
+                    raise ValueError("mmr_lambda must be between 0 and 1.")
+                state.warnings.append("mmr_lambda clamped to [0,1].")
+                mmr_lambda = max(0.0, min(1.0, mmr_lambda))
+
+            collection = resolve_collection_name(collection_name)
+            snippet_chars = clamp_snippet_chars(snippet_chars)
+            normalized_metadata_fields = (
+                normalize_metadata_fields(metadata_fields) or CONTEXT_METADATA_FIELDS
+            )
+            limit = min(top_k, 25)
+            if top_k > limit:
+                state.warnings.append("top_k clamped to 25 for context packing.")
+            resolved_candidate_k = candidate_k
+            if resolved_candidate_k is None:
+                resolved_candidate_k = limit * 3 if group_by_doc else limit
+            resolved_candidate_k = min(max(resolved_candidate_k, limit), 100)
+
+            combined_filter = resolve_combined_filter(
+                memory_filter,
+                query_filter,
+                state.warnings,
+            )
+            query_vector = await self._embed_query_cached(query)
+            vector_name = (
+                await self.qdrant_connector.resolve_vector_name(collection)
+                if use_mmr
+                else None
+            )
+            search_attempts: list[dict[str, Any]] = []
+
+            async def run_context_attempt(
+                strategy: str, active_filter: models.Filter | None
+            ) -> list[models.ScoredPoint]:
+                points = await self.qdrant_connector.query_points(
+                    query_vector,
+                    collection_name=collection,
+                    limit=resolved_candidate_k,
+                    query_filter=active_filter,
+                    with_vectors=use_mmr,
+                )
+                raw_count = len(points)
+                if use_mmr and points:
+                    mmr_points = mmr_select(
+                        query_vector,
+                        points,
+                        top_k=resolved_candidate_k,
+                        lambda_mult=mmr_lambda,
+                        vector_name=vector_name,
+                    )
+                    if mmr_points is None:
+                        state.warnings.append("MMR disabled due to missing vectors.")
+                    else:
+                        points = mmr_points
+
+                selected = select_points_for_output(
+                    points,
+                    limit=limit,
+                    group_by_doc=group_by_doc,
+                    max_chunks_per_doc=max_chunks_per_doc,
+                    min_score=min_score,
+                )
+                search_attempts.append(
+                    {
+                        "strategy": strategy,
+                        "filter_applied": active_filter is not None,
+                        "candidate_count": raw_count,
+                        "selected_count": len(selected),
+                    }
+                )
+                return selected
+
+            selected_points = await run_context_attempt("primary", combined_filter)
+            fallback_used = False
+            if (
+                not selected_points
+                and combined_filter is not None
+                and fallback_strategy == "relax_filters"
+            ):
+                fallback_used = True
+                selected_points = await run_context_attempt("relax_filters", None)
+
+            context_items: list[dict[str, Any]] = []
+            for index, point in enumerate(selected_points, start=1):
+                item = format_search_result(
+                    point,
+                    response_mode="compact",
+                    snippet_chars=snippet_chars,
+                    metadata_fields=normalized_metadata_fields,
+                )
+                item["citation"] = f"[{index}]"
+                context_items.append(item)
+
+            base_data: dict[str, Any] = {
+                "query": query,
+                "collection_name": collection,
+                "search_attempts": search_attempts,
+                "fallback_used": fallback_used,
+            }
+            context_items, context_text, budget = trim_context_to_budget(
+                context_items,
+                base_data=base_data,
+                max_output_chars=max_output_chars,
+            )
+            data = {
+                **base_data,
+                "context": context_items,
+                "context_text": context_text,
+                "result_count": len(context_items),
+                "usage": (
+                    "Use citation labels from context_text. Fetch payloads only for "
+                    "selected ids that need full source text."
+                ),
+            }
+            extra_meta = {
+                "top_k": limit,
+                "candidate_limit": resolved_candidate_k,
+                "query_vector_dim": len(query_vector),
+                "response_mode": "compact",
+                "metadata_fields": normalized_metadata_fields,
+                "group_by_doc": group_by_doc,
+                "max_chunks_per_doc": max_chunks_per_doc if group_by_doc else None,
+                "min_score": min_score,
+                "budget": budget,
+            }
+            return finish_request(state, data, extra_meta=extra_meta)
 
         async def recommend_memories(
             ctx: Context,
@@ -2668,6 +3242,35 @@ class QdrantMCPServer(FastMCP):
                     description="Max snippet length in characters, clamped to 40-1200."
                 ),
             ] = 240,
+            max_output_chars: Annotated[
+                int | None,
+                Field(
+                    description=(
+                        "Optional approximate response budget. When set, results are "
+                        "trimmed to fit 800-50000 characters."
+                    )
+                ),
+            ] = None,
+            metadata_fields: Annotated[
+                list[str] | None,
+                Field(
+                    description="Optional metadata field allowlist for compact output."
+                ),
+            ] = None,
+            group_by_doc: Annotated[
+                bool,
+                Field(description="Limit repeated chunks from the same document."),
+            ] = False,
+            max_chunks_per_doc: Annotated[
+                int,
+                Field(description="Max chunks per document when group_by_doc=true."),
+            ] = 2,
+            min_score: Annotated[
+                float | None,
+                Field(
+                    description="Optional minimum similarity score for returned hits."
+                ),
+            ] = None,
             negative_weight: Annotated[
                 float,
                 Field(description="Weight for negative vectors in the blend."),
@@ -2684,6 +3287,11 @@ class QdrantMCPServer(FastMCP):
                     "top_k": top_k,
                     "response_mode": response_mode,
                     "snippet_chars": snippet_chars,
+                    "max_output_chars": max_output_chars,
+                    "metadata_fields": metadata_fields,
+                    "group_by_doc": group_by_doc,
+                    "max_chunks_per_doc": max_chunks_per_doc,
+                    "min_score": min_score,
                     "negative_weight": negative_weight,
                 },
             )
@@ -2727,7 +3335,10 @@ class QdrantMCPServer(FastMCP):
             limit = top_k or self.qdrant_settings.search_limit
             if limit <= 0:
                 raise ValueError("top_k must be positive.")
+            if max_chunks_per_doc <= 0:
+                raise ValueError("max_chunks_per_doc must be positive.")
             snippet_chars = clamp_snippet_chars(snippet_chars)
+            selected_metadata_fields = normalize_metadata_fields(metadata_fields)
 
             collection = resolve_collection_name(collection_name)
             vector_name = await self.qdrant_connector.resolve_vector_name(collection)
@@ -2771,6 +3382,8 @@ class QdrantMCPServer(FastMCP):
 
             exclude_ids = positive_set | negative_set
             fetch_limit = min(limit + len(exclude_ids), limit * 2 + 50)
+            if group_by_doc or min_score is not None:
+                fetch_limit = min(max(fetch_limit, limit * 3), 100)
             points = await self.qdrant_connector.query_points(
                 query_vector,
                 collection_name=collection,
@@ -2780,31 +3393,48 @@ class QdrantMCPServer(FastMCP):
             )
 
             results = []
-            for point in points:
-                point_id = str(point.id)
-                if point_id in exclude_ids:
-                    continue
+            candidate_points = [
+                point for point in points if str(point.id) not in exclude_ids
+            ]
+            selected_points = select_points_for_output(
+                candidate_points,
+                limit=limit,
+                group_by_doc=group_by_doc,
+                max_chunks_per_doc=max_chunks_per_doc,
+                min_score=min_score,
+            )
+            for point in selected_points:
                 results.append(
                     format_search_result(
                         point,
                         response_mode=response_mode,
                         snippet_chars=snippet_chars,
+                        metadata_fields=selected_metadata_fields,
                     )
                 )
-                if len(results) >= limit:
-                    break
 
-            data = {
+            base_data: dict[str, Any] = {
                 "collection_name": collection,
-                "results": results,
                 "missing": missing_ids,
                 "excluded": sorted(exclude_ids),
             }
+            results, budget = trim_results_to_budget(
+                results,
+                base_data=base_data,
+                max_output_chars=max_output_chars,
+            )
+            data = {**base_data, "results": results}
             extra_meta = {
                 "top_k": limit,
+                "candidate_limit": fetch_limit,
                 "filter_applied": combined_filter is not None,
                 "query_vector_dim": len(query_vector),
                 "response_mode": response_mode,
+                "metadata_fields": selected_metadata_fields,
+                "group_by_doc": group_by_doc,
+                "max_chunks_per_doc": max_chunks_per_doc if group_by_doc else None,
+                "min_score": min_score,
+                "budget": budget,
             }
             return finish_request(state, data, extra_meta=extra_meta)
 
@@ -7283,6 +7913,7 @@ class QdrantMCPServer(FastMCP):
                     {
                         "name": "memory",
                         "tools": [
+                            "qdrant-build-context",
                             "qdrant-study-search",
                             "qdrant-find",
                             "qdrant-store",
@@ -7295,6 +7926,9 @@ class QdrantMCPServer(FastMCP):
                         "name": "collections",
                         "tools": [
                             "qdrant-list-collections",
+                            "qdrant-describe-collection",
+                            "qdrant-summarize-collection-schema",
+                            "qdrant-suggest-filters",
                             "qdrant-create-collection",
                             "qdrant-collection-info",
                         ],
@@ -7362,6 +7996,7 @@ class QdrantMCPServer(FastMCP):
                 raise ValueError(f"Unknown tool '{tool_name}'.")
             tool = self._tool_manager.get_tool(normalized_name)
             search_guidance_tools = {
+                "qdrant-build-context",
                 "qdrant-find",
                 "qdrant-study-search",
                 "qdrant-recommend-memories",
@@ -7382,8 +8017,221 @@ class QdrantMCPServer(FastMCP):
             }
             return finish_request(state, data)
 
+        async def describe_collection(
+            ctx: Context,
+            collection_name: Annotated[
+                str | None,
+                Field(description="Collection to describe for agent navigation."),
+            ] = None,
+        ) -> dict[str, Any]:
+            state = new_request(ctx, {"collection_name": collection_name})
+            name = resolve_collection_name(collection_name)
+            summary = await self.qdrant_connector.get_collection_summary(name)
+            payload_schema = summary.get("payload_schema") or {}
+            schema_fields = (
+                sorted(payload_schema.keys())
+                if isinstance(payload_schema, dict)
+                else []
+            )
+            normalized_fields = [
+                field.removeprefix(f"{METADATA_PATH}.") for field in schema_fields
+            ]
+            filterable_fields = [
+                field for field in normalized_fields if field in FILTER_FIELDS
+            ]
+            data = {
+                "collection_name": name,
+                "status": summary.get("status"),
+                "optimizer_status": summary.get("optimizer_status"),
+                "points_count": summary.get("points_count"),
+                "vectors": summary.get("vectors"),
+                "payload_index_count": len(schema_fields),
+                "payload_index_fields": schema_fields,
+                "known_memory_filter_fields": sorted(filterable_fields),
+                "suggested_tools": [
+                    "qdrant-build-context",
+                    "qdrant-suggest-filters",
+                    "qdrant-find",
+                    "qdrant-get-points",
+                ],
+            }
+            if "warnings" in summary:
+                data["warnings"] = summary["warnings"]
+            return finish_request(state, data)
+
+        async def summarize_collection_schema(
+            ctx: Context,
+            collection_name: Annotated[
+                str | None,
+                Field(
+                    description="Collection whose payload schema should be summarized."
+                ),
+            ] = None,
+        ) -> dict[str, Any]:
+            state = new_request(ctx, {"collection_name": collection_name})
+            name = resolve_collection_name(collection_name)
+            payload_schema = await self.qdrant_connector.get_collection_payload_schema(
+                name
+            )
+            schema_fields = sorted(payload_schema.keys())
+            normalized_fields = [
+                field.removeprefix(f"{METADATA_PATH}.") for field in schema_fields
+            ]
+            memory_filter_fields = [
+                field for field in normalized_fields if field in FILTER_FIELDS
+            ]
+            data = {
+                "collection_name": name,
+                "indexed_field_count": len(schema_fields),
+                "indexed_fields": schema_fields,
+                "memory_filter_fields": sorted(memory_filter_fields),
+                "memory_filter_keys": {
+                    field: memory_filter_key_for_field(field)
+                    for field in sorted(memory_filter_fields)
+                },
+                "unindexed_note": (
+                    "Qdrant payload schema lists indexed fields. Use qdrant-suggest-filters "
+                    "to sample values from stored payloads."
+                ),
+            }
+            return finish_request(state, data)
+
+        async def suggest_filters(
+            ctx: Context,
+            collection_name: Annotated[
+                str | None,
+                Field(description="Collection to inspect for useful exact filters."),
+            ] = None,
+            query: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Optional task/query text. Sample values found inside this "
+                        "text are returned as recommended filters."
+                    )
+                ),
+            ] = None,
+            fields: Annotated[
+                list[str] | None,
+                Field(
+                    description=(
+                        "Optional metadata fields to inspect. Defaults to indexed "
+                        "fields that qdrant memory filters understand."
+                    )
+                ),
+            ] = None,
+            sample_limit: Annotated[
+                int,
+                Field(description="Max payload samples to inspect, clamped to 0-100."),
+            ] = 25,
+            max_values_per_field: Annotated[
+                int,
+                Field(
+                    description="Max distinct sample values per field, clamped to 1-20."
+                ),
+            ] = 8,
+        ) -> dict[str, Any]:
+            state = new_request(
+                ctx,
+                {
+                    "collection_name": collection_name,
+                    "query": query,
+                    "fields": fields,
+                    "sample_limit": sample_limit,
+                    "max_values_per_field": max_values_per_field,
+                },
+            )
+            name = resolve_collection_name(collection_name)
+            payload_schema = await self.qdrant_connector.get_collection_payload_schema(
+                name
+            )
+            schema_fields = sorted(payload_schema.keys())
+            normalized_schema_fields = [
+                field.removeprefix(f"{METADATA_PATH}.") for field in schema_fields
+            ]
+            requested_fields = normalize_metadata_fields(fields)
+            if requested_fields is None:
+                selected_fields = [
+                    field
+                    for field in normalized_schema_fields
+                    if field in FILTER_FIELDS
+                ]
+            else:
+                selected_fields = [
+                    field for field in requested_fields if field in FILTER_FIELDS
+                ]
+                ignored = [
+                    field for field in requested_fields if field not in FILTER_FIELDS
+                ]
+                if ignored:
+                    state.warnings.append(
+                        f"Fields without memory_filter support ignored: {ignored}"
+                    )
+            selected_fields = sorted(dict.fromkeys(selected_fields))
+            sample_limit = max(0, min(sample_limit, 100))
+            max_values_per_field = max(1, min(max_values_per_field, 20))
+
+            samples: dict[str, list[Any]] = {field: [] for field in selected_fields}
+            sampled_points = 0
+            if selected_fields and sample_limit > 0:
+                points, _ = await self.qdrant_connector.scroll_points_page(
+                    collection_name=name,
+                    limit=sample_limit,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                sampled_points = len(points)
+                for point in points:
+                    payload = point.payload or {}
+                    for field in selected_fields:
+                        add_sample_value(
+                            samples,
+                            field,
+                            metadata_value_from_payload(payload, field),
+                            max_values=max_values_per_field,
+                        )
+
+            recommended_filters: dict[str, Any] = {}
+            query_text = (query or "").lower()
+            if query_text:
+                for field, values in samples.items():
+                    for value in values:
+                        value_text = str(value).strip()
+                        if value_text and value_text.lower() in query_text:
+                            recommended_filters[memory_filter_key_for_field(field)] = (
+                                value
+                            )
+                            break
+
+            field_rows = []
+            indexed = set(schema_fields) | set(normalized_schema_fields)
+            for field in selected_fields:
+                field_rows.append(
+                    {
+                        "field": field,
+                        "memory_filter_key": memory_filter_key_for_field(field),
+                        "indexed": (
+                            field in indexed or f"{METADATA_PATH}.{field}" in indexed
+                        ),
+                        "sample_values": samples.get(field, []),
+                    }
+                )
+
+            data = {
+                "collection_name": name,
+                "sampled_points": sampled_points,
+                "fields": field_rows,
+                "recommended_filters": recommended_filters,
+                "usage": (
+                    "Pass recommended_filters as memory_filter to qdrant-build-context "
+                    "or qdrant-find, then keep compact output unless full payloads are needed."
+                ),
+            }
+            return finish_request(state, data)
+
         find_foo = find
         study_search_foo = study_search
+        build_context_foo = build_context
         recommend_memories_foo = recommend_memories
         store_foo = store
         cache_memory_foo = cache_memory
@@ -7442,6 +8290,10 @@ class QdrantMCPServer(FastMCP):
         ):
             find_foo = make_partial_function(
                 find_foo, {"collection_name": self.qdrant_settings.collection_name}
+            )
+            build_context_foo = make_partial_function(
+                build_context_foo,
+                {"collection_name": self.qdrant_settings.collection_name},
             )
             recommend_memories_foo = make_partial_function(
                 recommend_memories_foo,
@@ -7519,6 +8371,10 @@ class QdrantMCPServer(FastMCP):
 
         collection_required_tag = "[Requires collection name]"
         collection_required_tool_names = {
+            "qdrant-build-context",
+            "qdrant-describe-collection",
+            "qdrant-summarize-collection-schema",
+            "qdrant-suggest-filters",
             "qdrant-find",
             "qdrant-recommend-memories",
             "qdrant-list-points",
@@ -7691,6 +8547,16 @@ class QdrantMCPServer(FastMCP):
         )
 
         register_tool(
+            build_context_foo,
+            name="qdrant-build-context",
+            description=(
+                "Build a collection-agnostic, token-budgeted second-brain context "
+                "pack with cited snippets, deduping, optional filters, and safe "
+                "relax-filters fallback."
+            ),
+        )
+
+        register_tool(
             study_search_foo,
             name="qdrant-study-search",
             description=(
@@ -7824,6 +8690,29 @@ class QdrantMCPServer(FastMCP):
             collection_exists,
             name="qdrant-collection-exists",
             description="Check if a collection exists.",
+        )
+        register_tool(
+            describe_collection,
+            name="qdrant-describe-collection",
+            description=(
+                "Describe a collection for agents: size, vectors, indexed fields, "
+                "and useful retrieval tools."
+            ),
+        )
+        register_tool(
+            summarize_collection_schema,
+            name="qdrant-summarize-collection-schema",
+            description=(
+                "Summarize indexed payload schema and memory_filter keys for a collection."
+            ),
+        )
+        register_tool(
+            suggest_filters,
+            name="qdrant-suggest-filters",
+            description=(
+                "Sample a collection's indexed metadata values and suggest exact "
+                "memory_filter fields for cheaper, cleaner retrieval."
+            ),
         )
         register_tool(
             collection_info,
