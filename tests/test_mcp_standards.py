@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import models
@@ -222,10 +222,15 @@ def test_every_registered_tool_has_required_annotations() -> None:
 
 
 @pytest.mark.asyncio
-async def test_compact_search_default_excludes_payload_and_cache_reuses_embedding() -> None:
+async def test_compact_search_default_excludes_payload_and_cache_reuses_embedding() -> (
+    None
+):
     server, provider = make_server()
     connector = FakeSearchConnector()
-    server._default_qdrant_connector = connector  # pylint: disable=protected-access
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        connector,
+    )
     find_tool = server._tool_manager.get_tool("qdrant-find")
     ctx = SimpleNamespace(request_id="search-test")
 
@@ -261,7 +266,10 @@ async def test_compact_search_default_excludes_payload_and_cache_reuses_embeddin
 async def test_recommend_memories_compact_default_excludes_payload() -> None:
     server, _ = make_server()
     connector = FakeSearchConnector()
-    server._default_qdrant_connector = connector  # pylint: disable=protected-access
+    server._default_qdrant_connector = cast(  # pylint: disable=protected-access
+        Any,
+        connector,
+    )
     recommend_tool = server._tool_manager.get_tool("qdrant-recommend-memories")
 
     response = await recommend_tool.fn(
@@ -291,7 +299,9 @@ async def test_navigation_tools_return_stable_compact_outputs() -> None:
         "qdrant-list-capabilities"
     ).fn(ctx)
     assert capabilities["data"]["tool_count"] >= 1
-    assert any(group["name"] == "navigation" for group in capabilities["data"]["groups"])
+    assert any(
+        group["name"] == "navigation" for group in capabilities["data"]["groups"]
+    )
 
     coverage = await server._tool_manager.get_tool(  # pylint: disable=protected-access
         "qdrant-get-endpoint-coverage"
