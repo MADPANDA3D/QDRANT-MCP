@@ -26,10 +26,10 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Run pre-commit
-        run: uv run --python 3.12 --group dev pre-commit run --all-files
+        run: uv run --python 3.12 --no-project --with pre-commit pre-commit run --all-files
 
       - name: Run tests
-        run: uv run --python 3.12 --group dev pytest
+        run: uv run --python 3.12 --locked --group dev pytest
 
       - name: Build Docker image
         run: docker build -t mad-mcp-qdrant:ci .
