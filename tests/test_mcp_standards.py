@@ -55,8 +55,11 @@ class FakeSearchConnector:
                 "class": "MUS327",
                 "subject": "World Music",
                 "module": "1",
+                "week": "1",
+                "status": "active",
                 "material_type": "lesson",
                 "title": "Module 1 Lesson 1",
+                "author": "Leo Lara",
                 "type": "note",
                 "scope": "global",
                 "source": "test",
@@ -268,11 +271,12 @@ async def test_compact_search_default_excludes_payload_and_cache_reuses_embeddin
         "class": "MUS327",
         "subject": "World Music",
         "module": "1",
+        "week": "1",
+        "status": "active",
         "material_type": "lesson",
         "title": "Module 1 Lesson 1",
+        "author": "Leo Lara",
         "type": "note",
-        "scope": "global",
-        "source": "test",
         "labels": ["alpha", "beta"],
         "doc_id": "doc-1",
     }
@@ -305,7 +309,11 @@ async def test_study_search_defaults_to_school_collection_and_compact_filters() 
         query="forced retrieval melody",
         class_code="MUS327",
         subject="World Music",
+        module="1",
+        week="1",
+        status="active",
         material_type="lesson",
+        author="Leo Lara",
         top_k=3,
     )
 
@@ -314,7 +322,11 @@ async def test_study_search_defaults_to_school_collection_and_compact_filters() 
     filter_keys = {condition.key for condition in connector.query_filters[0].must}
     assert "metadata.class" in filter_keys
     assert "metadata.subject" in filter_keys
+    assert "metadata.module" in filter_keys
+    assert "metadata.week" in filter_keys
+    assert "metadata.status" in filter_keys
     assert "metadata.material_type" in filter_keys
+    assert "metadata.author" in filter_keys
     result = response["data"]["results"][0]
     assert "payload" not in result
     assert result["metadata"]["class"] == "MUS327"
@@ -338,7 +350,8 @@ async def test_recommend_memories_compact_default_excludes_payload() -> None:
 
     result = response["data"]["results"][0]
     assert "payload" not in result
-    assert result["metadata"]["source"] == "test"
+    assert result["metadata"]["title"] == "Module 1 Lesson 1"
+    assert "source" not in result["metadata"]
 
 
 @pytest.mark.asyncio

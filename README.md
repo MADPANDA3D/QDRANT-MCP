@@ -151,7 +151,7 @@ result. For large content, prefer `qdrant-ingest-document` or
 `qdrant-ingest-textbook` instead of sending long text directly to store tools.
 For school work, start with `qdrant-study-search`; it defaults to the
 `MCP_STUDY_COLLECTION` collection and exposes course, subject, material type,
-title, document, and chapter filters directly.
+module, week, status, title, author, document, and chapter filters directly.
 
 <details>
 <summary>Core Memory Tools</summary>
@@ -169,7 +169,7 @@ title, document, and chapter filters directly.
   - Uses streaming download + page-wise extraction to reduce memory pressure.
   - With `ocr=true`, applies OCR coverage-gating (blank/low-text pages first) and fails fast if target coverage cannot be met within budget.
   - Job status is persisted on disk so restart scenarios return structured failure instead of `Job not found`.
-- `qdrant-study-search`: search school/study materials with compact output and direct course/subject/title filters.
+- `qdrant-study-search`: search school/study materials with compact output and direct course/week/module/material filters.
 - `qdrant-find`: query vectors with filters and return matches.
 - `qdrant-find-short-term`: query the short-term memory cache collection.
 - `qdrant-recommend-memories`: recommend memories using positive/negative examples.

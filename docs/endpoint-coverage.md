@@ -47,7 +47,8 @@ Source docs checked on 2026-04-29:
 - Use `qdrant-check-configuration` before provider calls when setup is uncertain.
 - Use `qdrant-list-capabilities` to choose a workflow.
 - Use `qdrant-study-search` first for school collections; pass `class_code`,
-  `subject`, `material_type`, `title`, `doc_id`, or `chapter` when known.
+  `subject`, `module`, `week`, `status`, `material_type`, `title`, `author`,
+  `doc_id`, or `chapter` when known.
 - Use `qdrant-find` with `response_mode="compact"` and `top_k=3-5` first.
 - Use `response_mode="payload"` only when the full stored payload is needed for the next action.
 - Use document ingest tools for large source text or PDFs instead of sending large content directly to `qdrant-store`.

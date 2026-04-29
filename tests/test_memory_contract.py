@@ -147,6 +147,7 @@ def test_build_memory_filter_school_fields():
             "class_code": "MUS327",
             "subject": "World Music",
             "module": "1",
+            "week": 1,
             "material_type": "lesson",
             "title": "Module 1 Lesson 1",
             "chapter": 2,
@@ -160,6 +161,7 @@ def test_build_memory_filter_school_fields():
     assert "metadata.class" in keys
     assert "metadata.subject" in keys
     assert "metadata.module" in keys
+    assert "metadata.week" in keys
     assert "metadata.material_type" in keys
     assert "metadata.title" in keys
     assert "metadata.chapter" in keys
@@ -171,6 +173,7 @@ def test_default_indexes_include_school_search_fields():
         "metadata.class",
         "metadata.subject",
         "metadata.module",
+        "metadata.week",
         "metadata.material_type",
         "metadata.title",
         "metadata.chapter",

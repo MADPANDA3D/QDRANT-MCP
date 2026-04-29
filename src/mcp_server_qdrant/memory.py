@@ -89,6 +89,7 @@ FILTER_FIELDS = {
     "course",
     "subject",
     "module",
+    "week",
     "status",
     "year",
     "material_type",
@@ -192,6 +193,9 @@ class MemoryFilterInput(BaseModel):
     subject: str | None = Field(default=None, description="Filter by subject.")
     module: str | int | None = Field(
         default=None, description="Filter by module number or label."
+    )
+    week: str | int | None = Field(
+        default=None, description="Filter by accelerated course week number or label."
     )
     status: str | None = Field(default=None, description="Filter by material status.")
     year: str | int | None = Field(default=None, description="Filter by material year.")
@@ -684,6 +688,7 @@ def build_memory_filter(
     add_match("class", raw.get("class"))
     add_match("subject", raw.get("subject"))
     add_match("module", raw.get("module"))
+    add_match("week", raw.get("week"))
     add_match("status", raw.get("status"))
     add_match("year", raw.get("year"))
     add_match("material_type", raw.get("material_type"))
@@ -817,6 +822,7 @@ def default_memory_indexes() -> dict[str, models.PayloadSchemaType]:
         f"{METADATA_PATH}.class": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.subject": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.module": models.PayloadSchemaType.KEYWORD,
+        f"{METADATA_PATH}.week": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.status": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.year": models.PayloadSchemaType.KEYWORD,
         f"{METADATA_PATH}.material_type": models.PayloadSchemaType.KEYWORD,

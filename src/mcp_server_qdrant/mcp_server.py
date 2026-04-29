@@ -541,11 +541,10 @@ class QdrantMCPServer(FastMCP):
         DRY_RUN_GROUP_FIELDS = ("scope", "type", "labels", "source", "doc_id")
         SEARCH_COMPACT_METADATA_FIELDS = (
             "type",
-            "scope",
-            "source",
             "class",
             "subject",
             "module",
+            "week",
             "status",
             "year",
             "material_type",
@@ -554,21 +553,15 @@ class QdrantMCPServer(FastMCP):
             "edition",
             "isbn",
             "publisher",
+            "chapter",
+            "chapter_title",
             "labels",
-            "entities",
             "doc_id",
             "doc_title",
-            "file_name",
             "file_type",
             "page_start",
             "page_end",
             "section_heading",
-            "created_at",
-            "updated_at",
-            "confidence",
-            "embedding_model",
-            "embedding_provider",
-            "embedding_version",
         )
         DRY_RUN_PREVIEW_FIELDS = (
             "text",
@@ -2546,6 +2539,18 @@ class QdrantMCPServer(FastMCP):
                 str | None,
                 Field(description="Optional exact subject filter."),
             ] = None,
+            module: Annotated[
+                str | int | None,
+                Field(description="Optional exact module number or label filter."),
+            ] = None,
+            week: Annotated[
+                str | int | None,
+                Field(description="Optional exact accelerated course week filter."),
+            ] = None,
+            status: Annotated[
+                str | None,
+                Field(description="Optional exact material status filter."),
+            ] = None,
             material_type: Annotated[
                 str | None,
                 Field(
@@ -2557,6 +2562,10 @@ class QdrantMCPServer(FastMCP):
             title: Annotated[
                 str | None,
                 Field(description="Optional exact title filter."),
+            ] = None,
+            author: Annotated[
+                str | None,
+                Field(description="Optional exact author filter."),
             ] = None,
             doc_id: Annotated[
                 str | None,
@@ -2593,8 +2602,12 @@ class QdrantMCPServer(FastMCP):
             optional_filters = {
                 "class": class_code,
                 "subject": subject,
+                "module": module,
+                "week": week,
+                "status": status,
                 "material_type": material_type,
                 "title": title,
+                "author": author,
                 "doc_id": doc_id,
                 "chapter": chapter,
             }
@@ -7683,8 +7696,8 @@ class QdrantMCPServer(FastMCP):
             description=(
                 "Search school/study materials with compact results by default. "
                 "Defaults to MCP_STUDY_COLLECTION and supports course, subject, "
-                "material_type, title, doc_id, and chapter filters to avoid noisy "
-                "cross-course retrieval."
+                "module, week, status, material_type, title, author, doc_id, and "
+                "chapter filters to avoid noisy cross-course retrieval."
             ),
         )
 
