@@ -1,0 +1,4 @@
+title = "Qdrant MCP public-source secret policy"
+
+[extend]
+useDefault = true

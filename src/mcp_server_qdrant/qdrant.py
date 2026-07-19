@@ -1,0 +1,933 @@
+import inspect
+import json
+import uuid
+from collections.abc import Mapping
+from typing import Any, Iterable
+
+from pydantic import BaseModel, SecretStr
+from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.http.exceptions import UnexpectedResponse
+
+from mcp_server_qdrant.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant.settings import METADATA_PATH
+
+Metadata = dict[str, Any]
+ArbitraryFilter = dict[str, Any]
+PointIdType = str | int | uuid.UUID
+
+
+class Entry(BaseModel):
+    """
+    A single entry in the Qdrant collection.
+    """
+
+    content: str
+    metadata: Metadata | None = None
+
+
+class QdrantConnector:
+    """
+    Encapsulates the connection to a Qdrant server and all the methods to interact with it.
+    :param qdrant_url: The URL of the Qdrant server.
+    :param qdrant_api_key: The API key to use for the Qdrant server.
+    :param collection_name: The name of the default collection to use. If not provided, each tool will require
+                            the collection name to be provided.
+    :param embedding_provider: The embedding provider to use.
+    :param qdrant_local_path: The path to the storage directory for the Qdrant client, if local mode is used.
+    """
+
+    def __init__(
+        self,
+        qdrant_url: str | None,
+        qdrant_api_key: str | None,
+        collection_name: str | None,
+        embedding_provider: EmbeddingProvider,
+        vector_name_override: str | None = None,
+        qdrant_local_path: str | None = None,
+        field_indexes: dict[str, models.PayloadSchemaType] | None = None,
+        request_timeout_seconds: float = 60.0,
+    ):
+        self._qdrant_url = qdrant_url.rstrip("/") if qdrant_url else None
+        self._qdrant_api_key = SecretStr(qdrant_api_key) if qdrant_api_key else None
+        self._default_collection_name = collection_name
+        self._embedding_provider = embedding_provider
+        self._vector_name_override_set = vector_name_override is not None
+        self._vector_name_override = (
+            vector_name_override.strip() if vector_name_override is not None else None
+        )
+        if self._vector_name_override == "":
+            self._vector_name_override = None
+        self._request_timeout_seconds = request_timeout_seconds
+        self._client = AsyncQdrantClient(
+            location=qdrant_url,
+            api_key=qdrant_api_key,
+            path=qdrant_local_path,
+            timeout=request_timeout_seconds,
+            trust_env=False,
+            # The client's compatibility probe runs in a background thread and
+            # bypasses this connector's bounded request lifecycle. Keep it off;
+            # real operations return stable, sanitized compatibility failures.
+            check_compatibility=False,
+        )
+        self._field_indexes = field_indexes
+        self._closed = False
+
+    def __repr__(self) -> str:
+        return (
+            "QdrantConnector("
+            f"collection_configured={self._default_collection_name is not None}, "
+            f"closed={self._closed})"
+        )
+
+    @property
+    def closed(self) -> bool:
+        """Return whether this connector has released its owned client."""
+
+        return self._closed
+
+    async def aclose(self) -> None:
+        """Idempotently close the owned async Qdrant client."""
+
+        if self._closed:
+            return
+        self._closed = True
+        self._qdrant_api_key = None
+        try:
+            await self._client.close()
+        except Exception:
+            raise RuntimeError("Qdrant client shutdown failed.") from None
+
+    async def get_collection_names(self) -> list[str]:
+        """
+        Get the names of all collections in the Qdrant server.
+        :return: A list of collection names.
+        """
+        response = await self._client.get_collections()
+        return [collection.name for collection in response.collections]
+
+    async def collection_exists(self, collection_name: str) -> bool:
+        return await self._client.collection_exists(collection_name)
+
+    async def store(
+        self,
+        entry: Entry,
+        *,
+        collection_name: str | None = None,
+        point_id: str | None = None,
+    ) -> str:
+        """
+        Store some information in the Qdrant collection, along with the specified metadata.
+        :param entry: The entry to store in the Qdrant collection.
+        :param collection_name: The name of the collection to store the information in, optional. If not provided,
+                                the default collection is used.
+        """
+        collection_name = collection_name or self._default_collection_name
+        assert collection_name is not None
+        await self._ensure_collection_exists(collection_name)
+
+        # Embed the document
+        # ToDo: instead of embedding text explicitly, use `models.Document`,
+        # it should unlock usage of server-side inference.
+        embeddings = await self._embedding_provider.embed_documents([entry.content])
+
+        # Add to Qdrant
+        vector_name = await self._resolve_vector_name(collection_name)
+        payload = {"document": entry.content, METADATA_PATH: entry.metadata}
+        vector_payload: list[float] | dict[str, list[float]]
+        if vector_name is None:
+            vector_payload = embeddings[0]
+        else:
+            vector_payload = {vector_name: embeddings[0]}
+        point_id = point_id or uuid.uuid4().hex
+        await self._client.upsert(
+            collection_name=collection_name,
+            points=[
+                models.PointStruct(
+                    id=point_id,
+                    vector=vector_payload,
+                    payload=payload,
+                )
+            ],
+        )
+        return point_id
+
+    async def store_entries(
+        self,
+        entries: list[Entry],
+        *,
+        collection_name: str | None = None,
+        point_ids: list[str] | None = None,
+    ) -> list[str]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not entries:
+            return []
+        if point_ids is not None and len(point_ids) != len(entries):
+            raise ValueError("point_ids length must match entries length")
+
+        await self._ensure_collection_exists(collection_name)
+
+        embeddings = await self._embedding_provider.embed_documents(
+            [entry.content for entry in entries]
+        )
+        vector_name = await self._resolve_vector_name(collection_name)
+
+        if point_ids is None:
+            point_ids = [uuid.uuid4().hex for _ in entries]
+
+        points: list[models.PointStruct] = []
+        for entry, embedding, point_id in zip(entries, embeddings, point_ids):
+            payload = {"document": entry.content, METADATA_PATH: entry.metadata}
+            if vector_name is None:
+                vector_payload: list[float] | dict[str, list[float]] = embedding
+            else:
+                vector_payload = {vector_name: embedding}
+            points.append(
+                models.PointStruct(
+                    id=point_id,
+                    vector=vector_payload,
+                    payload=payload,
+                )
+            )
+
+        await self._client.upsert(collection_name=collection_name, points=points)
+        return point_ids
+
+    async def upsert_points(
+        self,
+        points: list[models.PointStruct],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not points:
+            return
+        if not await self._client.collection_exists(collection_name):
+            raise ValueError(f"collection_name '{collection_name}' does not exist.")
+        await self._client.upsert(collection_name=collection_name, points=points)
+
+    async def create_dense_vector_name(
+        self,
+        *,
+        collection_name: str,
+        vector_name: str,
+        size: int,
+        distance: str,
+    ) -> None:
+        if not self._qdrant_url:
+            raise ValueError(
+                "Adding a named vector requires a remote Qdrant URL; "
+                "local-path migration is not supported."
+            )
+
+        try:
+            vector_distance = models.Distance(distance)
+        except ValueError:
+            raise ValueError("Qdrant returned an unsupported vector distance.") from None
+
+        try:
+            await self._client.create_vector_name(
+                collection_name=collection_name,
+                vector_name=vector_name,
+                vector_name_config=models.DenseVectorNameConfig(
+                    dense=models.DenseVectorConfig(
+                        size=size,
+                        distance=vector_distance,
+                    )
+                ),
+                timeout=max(1, int(self._request_timeout_seconds)),
+            )
+        except UnexpectedResponse as exc:
+            if exc.status_code == 404:
+                raise ValueError(
+                    "Qdrant rejected named vector creation with HTTP 404. "
+                    "This operation requires Qdrant v1.18.0 or newer."
+                ) from None
+            status = f" with HTTP {exc.status_code}" if isinstance(exc.status_code, int) else ""
+            raise ValueError(f"Qdrant named vector creation failed{status}.") from None
+        except Exception:
+            raise ValueError("Qdrant named vector creation failed.") from None
+
+    async def update_point_vectors(
+        self,
+        vectors: list[models.PointVectors],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not vectors:
+            return
+        await self._client.update_vectors(
+            collection_name=collection_name,
+            points=vectors,
+        )
+
+    async def search_points(
+        self,
+        query: str,
+        *,
+        collection_name: str | None = None,
+        limit: int = 10,
+        query_filter: models.Filter | None = None,
+        with_vectors: bool = False,
+    ) -> list[models.ScoredPoint]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        collection_exists = await self._client.collection_exists(collection_name)
+        if not collection_exists:
+            return []
+
+        query_vector = await self._embedding_provider.embed_query(query)
+        return await self.query_points(
+            query_vector,
+            collection_name=collection_name,
+            limit=limit,
+            query_filter=query_filter,
+            with_vectors=with_vectors,
+        )
+
+    async def query_points(
+        self,
+        query_vector: list[float],
+        *,
+        collection_name: str | None = None,
+        limit: int = 10,
+        query_filter: models.Filter | None = None,
+        with_vectors: bool = False,
+    ) -> list[models.ScoredPoint]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        collection_exists = await self._client.collection_exists(collection_name)
+        if not collection_exists:
+            return []
+
+        vector_name = await self._resolve_vector_name(collection_name)
+
+        search_kwargs: dict[str, Any] = {
+            "collection_name": collection_name,
+            "query": query_vector,
+            "limit": limit,
+            "query_filter": query_filter,
+            "with_payload": True,
+            "with_vectors": with_vectors,
+        }
+        if vector_name is not None:
+            search_kwargs["using"] = vector_name
+
+        search_results = await self._client.query_points(**search_kwargs)
+        return search_results.points
+
+    async def search(
+        self,
+        query: str,
+        *,
+        collection_name: str | None = None,
+        limit: int = 10,
+        query_filter: models.Filter | None = None,
+    ) -> list[Entry]:
+        """
+        Find points in the Qdrant collection. If there are no entries found, an empty list is returned.
+        :param query: The query to use for the search.
+        :param collection_name: The name of the collection to search in, optional. If not provided,
+                                the default collection is used.
+        :param limit: The maximum number of entries to return.
+        :param query_filter: The filter to apply to the query, if any.
+
+        :return: A list of entries found.
+        """
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        collection_exists = await self._client.collection_exists(collection_name)
+        if not collection_exists:
+            return []
+
+        search_results = await self.search_points(
+            query,
+            collection_name=collection_name,
+            limit=limit,
+            query_filter=query_filter,
+        )
+
+        entries: list[Entry] = []
+        for result in search_results:
+            payload = result.payload or {}
+            content = payload.get("document")
+            if content is None:
+                content = payload.get("content") or payload.get("text")
+            if content is None:
+                content = (
+                    json.dumps(payload, sort_keys=True)
+                    if payload
+                    else f"(no document payload for point {result.id})"
+                )
+            metadata = payload.get(METADATA_PATH) or payload.get("metadata")
+            entries.append(Entry(content=content, metadata=metadata))
+        return entries
+
+    async def scroll_points(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+        limit: int = 10,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+    ) -> list[models.Record]:
+        points, _ = await self.scroll_points_page(
+            collection_name=collection_name,
+            query_filter=query_filter,
+            limit=limit,
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+        )
+        return points
+
+    async def scroll_points_page(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+        limit: int = 10,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+        offset: PointIdType | None = None,
+    ) -> tuple[list[models.Record], PointIdType | None]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        response = await self._client.scroll(
+            collection_name=collection_name,
+            scroll_filter=query_filter,
+            limit=limit,
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+            offset=offset,
+        )
+        if isinstance(response, tuple):
+            points, next_offset = response
+        elif hasattr(response, "points"):
+            points = response.points
+            next_offset = getattr(response, "next_page_offset", None) or getattr(
+                response, "next_offset", None
+            )
+        else:
+            points = response
+            next_offset = None
+        return points, next_offset
+
+    async def retrieve_points(
+        self,
+        point_ids: Iterable[str],
+        *,
+        collection_name: str | None = None,
+        with_payload: bool = True,
+        with_vectors: bool = False,
+    ) -> list[models.Record]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        return await self._client.retrieve(
+            collection_name=collection_name,
+            ids=list(point_ids),
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+        )
+
+    async def set_payload(
+        self,
+        point_ids: Iterable[str],
+        payload: dict[str, Any],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        await self._client.set_payload(
+            collection_name=collection_name,
+            payload=payload,
+            points=list(point_ids),
+        )
+
+    async def overwrite_payload(
+        self,
+        point_ids: Iterable[str],
+        payload: dict[str, Any],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        await self._client.overwrite_payload(
+            collection_name=collection_name,
+            payload=payload,
+            points=list(point_ids),
+        )
+
+    async def count_points(
+        self,
+        *,
+        collection_name: str | None = None,
+        query_filter: models.Filter | None = None,
+    ) -> int:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        response = await self._client.count(
+            collection_name=collection_name,
+            count_filter=query_filter,
+            exact=True,
+        )
+        return response.count
+
+    async def delete_points(
+        self,
+        point_ids: Iterable[str],
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        selector = models.PointIdsList(points=list(point_ids))
+        await self._client.delete(
+            collection_name=collection_name,
+            points_selector=selector,
+        )
+
+    async def delete_by_filter(
+        self,
+        query_filter: models.Filter,
+        *,
+        collection_name: str | None = None,
+    ) -> None:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        selector = models.FilterSelector(filter=query_filter)
+        await self._client.delete(
+            collection_name=collection_name,
+            points_selector=selector,
+        )
+
+    async def _ensure_collection_exists(self, collection_name: str):
+        """
+        Ensure that the collection exists, creating it if necessary.
+        :param collection_name: The name of the collection to ensure exists.
+        """
+        collection_exists = await self._client.collection_exists(collection_name)
+        if not collection_exists:
+            vectors_config, _, _ = self._build_vectors_config(
+                vector_name=self._vector_name_override,
+                vector_name_is_explicit=self._vector_name_override_set,
+            )
+            await self._client.create_collection(
+                collection_name=collection_name,
+                vectors_config=vectors_config,
+            )
+            await self._apply_default_payload_indexes(collection_name)
+
+    async def create_collection(
+        self,
+        collection_name: str,
+        *,
+        vector_name: str | None = None,
+    ) -> dict[str, Any]:
+        name = collection_name.strip()
+        if not name:
+            raise ValueError("collection_name is required")
+
+        vector_name_is_explicit = vector_name is not None
+        sanitized_vector_name = vector_name.strip() if vector_name is not None else None
+        if sanitized_vector_name == "":
+            sanitized_vector_name = None
+
+        if await self._client.collection_exists(name):
+            return {
+                "collection_name": name,
+                "created": False,
+                "already_exists": True,
+                "vectors": await self.get_collection_vectors(name),
+                "payload_schema": await self.get_collection_payload_schema(name),
+                "indexes_applied": [],
+            }
+
+        if not vector_name_is_explicit:
+            sanitized_vector_name = self._vector_name_override
+            vector_name_is_explicit = self._vector_name_override_set
+
+        vectors_config, resolved_vector_name, vector_size = self._build_vectors_config(
+            vector_name=sanitized_vector_name,
+            vector_name_is_explicit=vector_name_is_explicit,
+        )
+        await self._client.create_collection(
+            collection_name=name,
+            vectors_config=vectors_config,
+        )
+        indexes_applied = await self._apply_default_payload_indexes(name)
+
+        return {
+            "collection_name": name,
+            "created": True,
+            "already_exists": False,
+            "vector_name": resolved_vector_name,
+            "vector_size": vector_size,
+            "distance": models.Distance.COSINE.value,
+            "vectors": await self.get_collection_vectors(name),
+            "payload_schema": await self.get_collection_payload_schema(name),
+            "indexes_applied": indexes_applied,
+        }
+
+    async def get_collection_info(
+        self, collection_name: str | None = None
+    ) -> models.CollectionInfo:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        return await self._client.get_collection(collection_name)
+
+    async def list_aliases(self) -> list[models.AliasDescription]:
+        response = await self._client.get_aliases()
+        return response.aliases
+
+    async def list_collection_aliases(self, collection_name: str) -> list[models.AliasDescription]:
+        response = await self._client.get_collection_aliases(collection_name)
+        return response.aliases
+
+    async def list_snapshots(self, collection_name: str) -> list[models.SnapshotDescription]:
+        return await self._client.list_snapshots(collection_name)
+
+    async def list_full_snapshots(self) -> list[models.SnapshotDescription]:
+        return await self._client.list_full_snapshots()
+
+    async def list_shard_snapshots(
+        self, collection_name: str, shard_id: int
+    ) -> list[models.SnapshotDescription]:
+        return await self._client.list_shard_snapshots(collection_name, shard_id)
+
+    async def get_collection_cluster_info(
+        self, collection_name: str
+    ) -> models.CollectionClusterInfo:
+        return await self._client.collection_cluster_info(collection_name)
+
+    async def get_collection_vectors(
+        self, collection_name: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        info = await self.get_collection_info(collection_name)
+        vector_map = self._parse_dense_vectors(info.config.params.vectors)
+        return {
+            self._display_vector_name(name): self._vector_params_to_dict(params)
+            for name, params in vector_map.items()
+        }
+
+    async def get_collection_payload_schema(
+        self, collection_name: str | None = None
+    ) -> dict[str, Any]:
+        info = await self.get_collection_info(collection_name)
+        schema = {}
+        if info.payload_schema:
+            for field_name, field_schema in info.payload_schema.items():
+                schema[field_name] = str(field_schema)
+        return schema
+
+    async def ensure_payload_indexes(
+        self,
+        *,
+        collection_name: str | None = None,
+        indexes: dict[str, models.PayloadSchemaType] | None = None,
+    ) -> dict[str, str]:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        if not indexes:
+            return {}
+
+        info = await self.get_collection_info(collection_name)
+        existing = info.payload_schema or {}
+
+        created: dict[str, str] = {}
+        for field_name, field_schema in indexes.items():
+            if field_name in existing:
+                continue
+            await self._client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+            created[field_name] = str(field_schema)
+
+        return created
+
+    async def update_optimizer_config(
+        self,
+        *,
+        collection_name: str | None = None,
+        optimizers_config: models.OptimizersConfigDiff,
+        timeout: int | None = None,
+    ) -> bool:
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("collection_name is required")
+        return await self._client.update_collection(
+            collection_name=collection_name,
+            optimizers_config=optimizers_config,
+            timeout=timeout,
+        )
+
+    async def get_collection_summary(self, collection_name: str | None = None) -> dict[str, Any]:
+        info = await self.get_collection_info(collection_name)
+        vectors = self._parse_dense_vectors(info.config.params.vectors)
+        payload_schema = {}
+        if info.payload_schema:
+            for field_name, field_schema in info.payload_schema.items():
+                payload_schema[field_name] = str(field_schema)
+        summary: dict[str, Any] = {
+            "status": str(info.status),
+            "optimizer_status": str(info.optimizer_status),
+            "points_count": info.points_count,
+            "indexed_vectors_count": info.indexed_vectors_count,
+            "segments_count": info.segments_count,
+            "vectors": {
+                self._display_vector_name(name): self._vector_params_to_dict(params)
+                for name, params in vectors.items()
+            },
+            "payload_schema": payload_schema,
+        }
+        if info.warnings:
+            summary["warnings"] = [str(warning) for warning in info.warnings]
+        if getattr(info.config.params, "sparse_vectors", None):
+            summary["sparse_vectors"] = list(info.config.params.sparse_vectors.keys())
+        return summary
+
+    async def ensure_collection_exists(self, collection_name: str) -> None:
+        await self._ensure_collection_exists(collection_name)
+
+    async def resolve_vector_name(self, collection_name: str) -> str | None:
+        return await self._resolve_vector_name(collection_name)
+
+    async def _apply_default_payload_indexes(self, collection_name: str) -> list[str]:
+        applied: list[str] = []
+        if self._field_indexes:
+            for field_name, field_type in self._field_indexes.items():
+                await self._client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=field_type,
+                )
+                applied.append(field_name)
+        return applied
+
+    def _build_vectors_config(
+        self,
+        *,
+        vector_name: str | None,
+        vector_name_is_explicit: bool,
+    ) -> tuple[models.VectorsConfig, str | None, int]:
+        vector_size = self._embedding_provider.get_vector_size()
+        if vector_name_is_explicit:
+            if vector_name is None:
+                return (
+                    models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    ),
+                    None,
+                    vector_size,
+                )
+            return (
+                {
+                    vector_name: models.VectorParams(
+                        size=vector_size,
+                        distance=models.Distance.COSINE,
+                    )
+                },
+                vector_name,
+                vector_size,
+            )
+
+        provider_vector_name = self._embedding_provider.get_vector_name()
+        if provider_vector_name is None:
+            return (
+                models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                ),
+                None,
+                vector_size,
+            )
+        return (
+            {
+                provider_vector_name: models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                )
+            },
+            provider_vector_name,
+            vector_size,
+        )
+
+    def _vector_params_to_dict(self, params: models.VectorParams) -> dict[str, Any]:
+        distance = params.distance
+        if hasattr(distance, "value"):
+            distance = distance.value
+        return {
+            "size": params.size,
+            "distance": distance,
+            "on_disk": params.on_disk,
+        }
+
+    def _display_vector_name(self, name: str | None) -> str:
+        return "(default)" if name is None else name
+
+    def _parse_dense_vectors(
+        self, vectors: models.VectorsConfig
+    ) -> dict[str | None, models.VectorParams]:
+        if isinstance(vectors, models.VectorParams):
+            return {None: vectors}
+        if isinstance(vectors, Mapping):
+            return dict(vectors)
+        return {}
+
+    async def _resolve_vector_name(self, collection_name: str) -> str | None:
+        if self._vector_name_override_set:
+            if not collection_name or not await self._client.collection_exists(collection_name):
+                return self._vector_name_override
+
+            info = await self._client.get_collection(collection_name)
+            vector_map = self._parse_dense_vectors(info.config.params.vectors)
+            embedding_size = self._embedding_provider.get_vector_size()
+
+            if self._vector_name_override is None:
+                if len(vector_map) == 1 and next(iter(vector_map.keys())) is None:
+                    params = next(iter(vector_map.values()))
+                    if params.size != embedding_size:
+                        raise ValueError(
+                            "Embedding size does not match the collection vector size. "
+                            f"Embedding size={embedding_size}, collection vector size={params.size}."
+                        )
+                    return None
+                available = ", ".join(self._display_vector_name(name) for name in vector_map.keys())
+                raise ValueError(
+                    "Collection uses named vectors, but QDRANT_VECTOR_NAME is not set. "
+                    f"Available: {available}."
+                )
+
+            if self._vector_name_override not in vector_map:
+                available = ", ".join(self._display_vector_name(name) for name in vector_map.keys())
+                raise ValueError(
+                    "QDRANT_VECTOR_NAME is not configured in this collection. "
+                    f"Available: {available}."
+                )
+
+            params = vector_map[self._vector_name_override]
+            if params.size != embedding_size:
+                raise ValueError(
+                    "Embedding size does not match the collection vector size. "
+                    f"Embedding size={embedding_size}, collection vector size={params.size}."
+                )
+            return self._vector_name_override
+
+        if not collection_name:
+            return self._embedding_provider.get_vector_name()
+
+        if not await self._client.collection_exists(collection_name):
+            return self._embedding_provider.get_vector_name()
+
+        info = await self._client.get_collection(collection_name)
+        vector_map = self._parse_dense_vectors(info.config.params.vectors)
+        if not vector_map:
+            return self._embedding_provider.get_vector_name()
+
+        embedding_size = self._embedding_provider.get_vector_size()
+
+        if len(vector_map) == 1:
+            name, params = next(iter(vector_map.items()))
+            if params.size != embedding_size:
+                raise ValueError(
+                    "Embedding size does not match the collection vector size. "
+                    f"Embedding size={embedding_size}, collection vector size={params.size}."
+                )
+            return name
+
+        matching = [name for name, params in vector_map.items() if params.size == embedding_size]
+        if len(matching) == 1:
+            return matching[0]
+
+        if len(matching) == 0:
+            available = ", ".join(
+                f"{self._display_vector_name(name)}(size={params.size})"
+                for name, params in vector_map.items()
+            )
+            raise ValueError(
+                "No vectors in the collection match the embedding size. "
+                f"Embedding size={embedding_size}. Available: {available}. "
+                "Set QDRANT_VECTOR_NAME or adjust EMBEDDING_MODEL."
+            )
+
+        options = ", ".join(self._display_vector_name(name) for name in matching)
+        raise ValueError(
+            "Multiple vectors match the embedding size. "
+            f"Matches: {options}. Set QDRANT_VECTOR_NAME."
+        )
+
+    async def create_snapshot(
+        self,
+        collection_name: str,
+        *,
+        wait: bool | None = None,
+    ) -> models.SnapshotDescription:
+        method = getattr(self._client, "create_snapshot", None)
+        if method is None:
+            raise ValueError("qdrant-client does not support create_snapshot.")
+        if wait is None:
+            return await method(collection_name=collection_name)
+        try:
+            return await method(collection_name=collection_name, wait=wait)
+        except TypeError:
+            return await method(collection_name=collection_name)
+
+    async def recover_snapshot(
+        self,
+        collection_name: str,
+        *,
+        location: str,
+        api_key: str | None = None,
+        checksum: str | None = None,
+        wait: bool | None = None,
+        priority: str | None = None,
+    ) -> Any:
+        method = getattr(self._client, "recover_snapshot", None)
+        if method is None:
+            raise ValueError("qdrant-client does not support recover_snapshot.")
+        kwargs: dict[str, Any] = {
+            "collection_name": collection_name,
+            "location": location,
+        }
+        if api_key:
+            kwargs["api_key"] = api_key
+        if checksum:
+            kwargs["checksum"] = checksum
+        if wait is not None:
+            kwargs["wait"] = wait
+        if priority:
+            kwargs["priority"] = priority
+
+        try:
+            sig = inspect.signature(method)
+        except (TypeError, ValueError):
+            sig = None
+
+        if sig is not None:
+            allowed = set(sig.parameters.keys())
+            kwargs = {key: value for key, value in kwargs.items() if key in allowed}
+
+        return await method(**kwargs)
