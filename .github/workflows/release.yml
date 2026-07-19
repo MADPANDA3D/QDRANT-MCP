@@ -1,0 +1,847 @@
+name: Release v2.0.0
+
+on:
+  push:
+    tags: ['v2.0.0']
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/madpanda3d/qdrant-mcp-server
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb
+  UV_VERSION: 0.11.29
+
+jobs:
+  verify-python:
+    name: Python ${{ matrix.python }} exact-tag verification
+    runs-on: ubuntu-24.04
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12.13', '3.13.11']
+    steps:
+      - name: Check out exact tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Require the exact setup interpreter
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          assert sys.version.split()[0] == os.environ['UV_PYTHON'], sys.version
+          PY
+      - name: Verify annotated v2.0.0 tag, default-branch tip, and package version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$GITHUB_REF_NAME" = v2.0.0
+          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
+          RELEASE_SHA=$(git rev-parse HEAD)
+          TAG_SHA=$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{}")
+          test "$RELEASE_SHA" = "$TAG_SHA"
+          test "$RELEASE_SHA" = "$GITHUB_SHA"
+          git fetch --no-tags origin \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git show-ref --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH"
+          DEFAULT_BRANCH_SHA=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
+          if [[ "$RELEASE_SHA" != "$DEFAULT_BRANCH_SHA" ]]; then
+            echo "::error::The release tag points to $RELEASE_SHA, but origin/$DEFAULT_BRANCH is $DEFAULT_BRANCH_SHA. Refusing to publish a stale ancestor."
+            exit 1
+          fi
+          PACKAGE_VERSION=$(python - <<'PY'
+          import tomllib
+          with open('pyproject.toml', 'rb') as handle:
+              print(tomllib.load(handle)['project']['version'])
+          PY
+          )
+          test "$PACKAGE_VERSION" = 2.0.0
+          test "${GITHUB_REF_NAME#v}" = "$PACKAGE_VERSION"
+      - name: Test exact tag
+        run: |
+          uv sync --frozen --group dev
+          uv run python - <<'PY'
+          import os
+          import sys
+
+          assert sys.version.split()[0] == os.environ['UV_PYTHON'], sys.version
+          PY
+          uv run python -m compileall -q src tests scripts
+          uv run pytest
+          uv run ruff check src tests scripts
+          uv run ruff format --check src tests scripts
+      - name: Run single-version source and dependency gates
+        if: matrix.python == '3.12.13'
+        run: |
+          uv run python scripts/check_source_safety.py
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements-txt --output-file /tmp/qdrant-requirements.lock
+          uv run pip-audit --requirement /tmp/qdrant-requirements.lock
+      - name: Scan exact tag history with Gitleaks
+        if: matrix.python == '3.12.13'
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/repo:ro" --workdir /repo \
+            "$GITLEAKS_IMAGE" git --config .gitleaks.toml \
+            --redact --verbose --no-banner .
+      - name: Validate workflow syntax and semantics
+        if: matrix.python == '3.12.13'
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl --fail --location --silent --show-error \
+            --output /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check --strict
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint
+      - name: Scan source configuration and secrets with Trivy
+        if: matrix.python == '3.12.13'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.72.0
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig,secret
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+
+  codeql-gate:
+    name: Require successful exact-SHA public CodeQL analysis
+    runs-on: ubuntu-24.04
+    needs: verify-python
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Verify public repository and successful CodeQL job
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VISIBILITY=$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)
+          if [[ "$VISIBILITY" != public ]]; then
+            echo "::error::The canonical repository must be public before the CodeQL release gate can pass."
+            exit 1
+          fi
+
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/codeql.yml/runs?head_sha=$GITHUB_SHA&status=completed&per_page=100" \
+            > /tmp/qdrant-codeql-runs.json
+          mapfile -t RUN_IDS < <(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/qdrant-codeql-runs.json').read_text())
+          runs = [
+              run for run in payload.get('workflow_runs', [])
+              if run.get('head_sha') == os.environ['GITHUB_SHA']
+              and run.get('status') == 'completed'
+              and run.get('conclusion') == 'success'
+          ]
+          for run in sorted(runs, key=lambda item: (item.get('run_attempt', 0), item['id']), reverse=True):
+              print(run['id'])
+          PY
+          )
+
+          for run_id in "${RUN_IDS[@]}"; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
+              > /tmp/qdrant-codeql-jobs.json
+            if python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/qdrant-codeql-jobs.json').read_text())
+          matched = any(
+              job.get('name') == 'Python security analysis'
+              and job.get('status') == 'completed'
+              and job.get('conclusion') == 'success'
+              for job in payload.get('jobs', [])
+          )
+          raise SystemExit(0 if matched else 1)
+          PY
+            then
+              echo "Exact-SHA CodeQL gate passed with workflow run $run_id."
+              exit 0
+            fi
+          done
+
+          echo "::error::No successful CodeQL analysis job exists for exact SHA $GITHUB_SHA in the public repository."
+          exit 1
+
+  compose:
+    name: Validate source and immutable Compose selection
+    runs-on: ubuntu-24.04
+    needs: verify-python
+    steps:
+      - name: Check out exact tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - name: Validate all credential modes and digest selection
+        env:
+          MCP_ACCESS_TOKEN: release-standalone-token-000000000000000000000000000000000000000000
+          MCP_PORTAL_GRANT_TOKEN: release-portal-grant-000000000000000000000000000000000000000000
+          MCP_BUILD_SHA: ${{ github.sha }}
+          MCP_SOURCE_FINGERPRINT: '1111111111111111111111111111111111111111111111111111111111111111'
+          QDRANT_URL: https://qdrant.example.com
+          QDRANT_API_KEY: synthetic-qdrant-key
+          OPENAI_API_KEY: synthetic-server-openai-key
+          OPENAI_BASE_URL: https://api.openai.example/v1
+          OPENAI_ORG: synthetic-server-openai-org
+          OPENAI_PROJECT: synthetic-server-openai-project
+          MCP_QDRANT_HOST_ALLOWLIST: qdrant.example.com
+        run: |
+          docker compose --profile standalone config --format json \
+            > /tmp/qdrant-source.json
+          QDRANT_URL='' QDRANT_API_KEY='' \
+            docker compose --profile standalone-request config --format json \
+            > /tmp/qdrant-request.json
+          MCP_RUNTIME_IMAGE=ghcr.io/madpanda3d/qdrant-mcp-server@sha256:2222222222222222222222222222222222222222222222222222222222222222 \
+            docker compose --profile portal config --format json \
+            > /tmp/qdrant-digest.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          source = json.loads(Path('/tmp/qdrant-source.json').read_text())
+          request = json.loads(Path('/tmp/qdrant-request.json').read_text())
+          digest = json.loads(Path('/tmp/qdrant-digest.json').read_text())
+          source_service = source['services']['qdrant-mcp-standalone']
+          request_service = request['services']['qdrant-mcp-standalone-request']
+          digest_service = digest['services']['qdrant-mcp-portal']
+          expected = 'ghcr.io/madpanda3d/qdrant-mcp-server@sha256:' + ('2' * 64)
+          assert source_service['image'] == 'qdrant-mcp:local-source'
+          assert source_service['environment']['MCP_MODE'] == 'standalone'
+          assert source_service['environment']['QDRANT_CREDENTIAL_MODE'] == 'server'
+          assert request_service['environment']['QDRANT_CREDENTIAL_MODE'] == 'request'
+          assert request_service['environment']['MCP_ALLOW_REQUEST_OVERRIDES'] == 'true'
+          assert request_service['environment']['MCP_REQUIRE_REQUEST_QDRANT_URL'] == 'true'
+          assert request_service['environment']['MCP_DISABLE_DEFAULT_QDRANT_FALLBACK'] == 'true'
+          assert request_service['environment']['QDRANT_URL'] == ''
+          assert request_service['environment']['QDRANT_API_KEY'] == ''
+          for key in ('OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORG', 'OPENAI_PROJECT'):
+              assert request_service['environment'][key] == ''
+          assert request_service['environment']['EMBEDDING_PROVIDER'] == 'fastembed'
+          assert request_service['environment']['EMBEDDING_MODEL'] == 'sentence-transformers/all-MiniLM-L6-v2'
+          assert digest_service['image'] == expected
+          assert digest_service['environment']['MCP_IMAGE_REFERENCE'] == expected
+          assert digest_service['environment']['MCP_MODE'] == 'portal'
+          assert digest_service['environment']['QDRANT_CREDENTIAL_MODE'] == 'request'
+          assert digest_service['environment']['MCP_ALLOW_REQUEST_OVERRIDES'] == 'true'
+          assert digest_service['environment']['MCP_REQUIRE_REQUEST_QDRANT_URL'] == 'true'
+          assert digest_service['environment']['MCP_DISABLE_DEFAULT_QDRANT_FALLBACK'] == 'true'
+          assert digest_service['environment']['QDRANT_URL'] == ''
+          assert digest_service['environment']['QDRANT_API_KEY'] == ''
+          for key in ('OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORG', 'OPENAI_PROJECT'):
+              assert digest_service['environment'][key] == ''
+          assert digest_service['environment']['EMBEDDING_PROVIDER'] == 'fastembed'
+          assert digest_service['environment']['EMBEDDING_MODEL'] == 'sentence-transformers/all-MiniLM-L6-v2'
+          for service in (source_service, request_service, digest_service):
+              assert service['user'] == '10001:10001'
+              assert service['read_only'] is True
+              assert service['cap_drop'] == ['ALL']
+              assert service['security_opt'] == ['no-new-privileges:true']
+              assert service['environment']['MCP_SERVER_VERSION'] == '2.0.0'
+              assert 'MCP_BUILD_SHA' not in service['environment']
+              assert 'MCP_SOURCE_FINGERPRINT' not in service['environment']
+              assert 'MCP_IMAGE_DIGEST' not in service['environment']
+          PY
+
+  package:
+    name: Build exact Python artifacts
+    runs-on: ubuntu-24.04
+    needs: verify-python
+    steps:
+      - name: Check out exact tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.12.13
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Fix the reproducible package epoch to the tagged commit
+        run: |
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+          [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$GITHUB_ENV"
+      - name: Build twice and prove deterministic tagged artifacts
+        run: |
+          uv sync --frozen --group dev
+          mkdir -p /tmp/qdrant-package-rebuild
+          uv build --out-dir dist
+          uv build --out-dir /tmp/qdrant-package-rebuild
+          (cd dist && sha256sum -- *.whl *.tar.gz | sort) > /tmp/qdrant-package-first.sha256
+          (cd /tmp/qdrant-package-rebuild && sha256sum -- *.whl *.tar.gz | sort) \
+            > /tmp/qdrant-package-second.sha256
+          diff -u /tmp/qdrant-package-first.sha256 /tmp/qdrant-package-second.sha256
+          uv run twine check dist/*
+          uv run python scripts/check_package_archives.py
+          test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 1
+          mkdir -p release
+          (cd dist && sha256sum -- *.whl *.tar.gz > ../release/SHA256SUMS)
+      - name: Install and inspect the exact wheel
+        run: |
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements-txt --output-file /tmp/qdrant-requirements.lock
+          python -m venv /tmp/qdrant-release-wheel-venv
+          uv pip install --python /tmp/qdrant-release-wheel-venv/bin/python \
+            --require-hashes --requirement /tmp/qdrant-requirements.lock
+          uv pip install --python /tmp/qdrant-release-wheel-venv/bin/python \
+            --no-deps dist/*.whl
+          /tmp/qdrant-release-wheel-venv/bin/python - <<'PY'
+          from importlib.metadata import entry_points, version
+
+          from mcp_server_qdrant import __version__
+
+          assert version('mad-mcp-qdrant') == '2.0.0'
+          assert __version__ == '2.0.0'
+          scripts = {
+              item.name: item.value for item in entry_points(group='console_scripts')
+          }
+          assert scripts['mad-mcp-qdrant'] == 'mcp_server_qdrant.main:main'
+          assert scripts['mcp-server-qdrant'] == 'mcp_server_qdrant.main:main'
+          PY
+      - name: Store exact release artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: qdrant-mcp-v2.0.0-dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  image:
+    name: Publish and verify a run-scoped image candidate
+    runs-on: ubuntu-24.04
+    needs: [verify-python, codeql-gate, compose, package]
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      candidate_ref: ${{ steps.candidate.outputs.ref }}
+      digest: ${{ steps.resolve.outputs.digest }}
+      fingerprint: ${{ steps.source.outputs.fingerprint }}
+    steps:
+      - name: Check out exact tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - name: Read repository visibility
+        id: repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VISIBILITY=$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)
+          case "$VISIBILITY" in
+            public|private|internal) ;;
+            *) echo "::error::GitHub returned an unknown repository visibility."; exit 1 ;;
+          esac
+          echo "visibility=$VISIBILITY" >> "$GITHUB_OUTPUT"
+      - name: Require public source before any package publication
+        env:
+          REPOSITORY_VISIBILITY: ${{ steps.repository.outputs.visibility }}
+        run: |
+          if [[ "$REPOSITORY_VISIBILITY" != public ]]; then
+            echo "::error::The exact tagged workflow must be rerun after the canonical source repository is public; no package state was published."
+            exit 1
+          fi
+      - name: Download exact Python artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: qdrant-mcp-v2.0.0-dist
+          path: .
+      - name: Verify artifact checksums
+        run: (cd dist && sha256sum --check --strict ../release/SHA256SUMS)
+      - name: Attest Python release artifacts
+        if: steps.repository.outputs.visibility == 'public'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: dist/*
+      - name: Compute exact-source fingerprint
+        id: source
+        run: echo "fingerprint=$(git archive --format=tar HEAD | sha256sum | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Select the stable candidate reference for this workflow run
+        id: candidate
+        run: echo "ref=${IMAGE_NAME}:candidate-${GITHUB_SHA}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+      - name: Reuse an existing candidate when a failed job is rerun
+        id: existing
+        env:
+          CANDIDATE_REF: ${{ steps.candidate.outputs.ref }}
+        run: |
+          if docker buildx imagetools inspect "$CANDIDATE_REF" --raw \
+            > /tmp/qdrant-existing-candidate.json 2>/dev/null; then
+            DIGEST="sha256:$(sha256sum /tmp/qdrant-existing-candidate.json | awk '{print $1}')"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+            echo "Reusing $CANDIDATE_REF at $DIGEST"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish only the run-scoped candidate with SBOM and provenance
+        id: push
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.candidate.outputs.ref }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=2.0.0
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            SOURCE_FINGERPRINT=${{ steps.source.outputs.fingerprint }}
+            IMAGE_VERSION=2.0.0
+          sbom: true
+          provenance: mode=max
+      - name: Resolve and validate the exact candidate digest
+        id: resolve
+        env:
+          CANDIDATE_REF: ${{ steps.candidate.outputs.ref }}
+          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+          PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          if [[ "${{ steps.existing.outputs.exists }}" == true ]]; then
+            DIGEST=$EXISTING_DIGEST
+          else
+            DIGEST=$PUSHED_DIGEST
+          fi
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Candidate publication did not produce a valid sha256 digest."
+            exit 1
+          fi
+          docker buildx imagetools inspect "$CANDIDATE_REF" --raw \
+            > /tmp/qdrant-candidate.json
+          OBSERVED="sha256:$(sha256sum /tmp/qdrant-candidate.json | awk '{print $1}')"
+          if [[ "$OBSERVED" != "$DIGEST" ]]; then
+            echo "::error::Candidate reference resolved to $OBSERVED instead of $DIGEST."
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Require exact OCI identity labels before trusting the candidate
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          SOURCE_FINGERPRINT: ${{ steps.source.outputs.fingerprint }}
+        run: |
+          EXACT_IMAGE="${IMAGE_NAME}@${IMAGE_DIGEST}"
+          docker pull "$EXACT_IMAGE"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$EXACT_IMAGE")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$EXACT_IMAGE")" = 2.0.0
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$EXACT_IMAGE")" = "https://github.com/$GITHUB_REPOSITORY"
+          test "$(docker image inspect --format '{{ index .Config.Labels "com.madpanda.source-fingerprint" }}' "$EXACT_IMAGE")" = "$SOURCE_FINGERPRINT"
+      - name: Scan exact published digest with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.72.0
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.resolve.outputs.digest }}
+          format: table
+          exit-code: 1
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Attest published image
+        if: steps.repository.outputs.visibility == 'public'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.resolve.outputs.digest }}
+          push-to-registry: true
+      - name: Require anonymous exact-digest pull access
+        env:
+          CANDIDATE_REF: ${{ steps.candidate.outputs.ref }}
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          docker logout ghcr.io
+          if ! docker manifest inspect "$CANDIDATE_REF" >/dev/null \
+            || ! docker manifest inspect "${IMAGE_NAME}@${IMAGE_DIGEST}" >/dev/null; then
+            echo "::error::The Qdrant MCP GHCR package is not public. Make only this linked package public, then rerun this exact tagged workflow."
+            exit 1
+          fi
+          docker pull "${IMAGE_NAME}@${IMAGE_DIGEST}"
+      - name: Preflight stable tags anonymously before PyPI
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          PACKAGE_PATH=${IMAGE_NAME#ghcr.io/}
+          if [[ "$PACKAGE_PATH" == "$IMAGE_NAME" || -z "$PACKAGE_PATH" ]]; then
+            echo "::error::IMAGE_NAME must be a ghcr.io package path."
+            exit 1
+          fi
+          if ! TOKEN_PAYLOAD=$(curl --fail --silent --show-error --get \
+            --data-urlencode service=ghcr.io \
+            --data-urlencode "scope=repository:${PACKAGE_PATH}:pull" \
+            https://ghcr.io/token); then
+            echo "::error::Could not obtain an anonymous GHCR pull token. Make the package public and grant the canonical repository Actions access, then rerun failed jobs in this workflow run."
+            exit 1
+          fi
+          REGISTRY_TOKEN=$(TOKEN_PAYLOAD="$TOKEN_PAYLOAD" python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ['TOKEN_PAYLOAD'])
+          print(payload.get('token') or payload.get('access_token') or '')
+          PY
+          )
+          if [[ -z "$REGISTRY_TOKEN" ]]; then
+            echo "::error::GHCR did not issue an anonymous pull token. Make the package public and grant the canonical repository Actions access, then rerun failed jobs in this workflow run."
+            exit 1
+          fi
+
+          MANIFEST_ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+          if ! CANDIDATE_STATUS=$(curl --silent --show-error --head \
+            --output /dev/null --dump-header /tmp/qdrant-public-candidate.headers \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer $REGISTRY_TOKEN" \
+            --header "Accept: $MANIFEST_ACCEPT" \
+            "https://ghcr.io/v2/${PACKAGE_PATH}/manifests/${IMAGE_DIGEST}"); then
+            echo "::error::Anonymous GHCR candidate preflight failed. Confirm package visibility and rerun failed jobs in this workflow run."
+            exit 1
+          fi
+          CANDIDATE_REGISTRY_DIGEST=$(tr -d '\r' < /tmp/qdrant-public-candidate.headers \
+            | awk -F': ' 'tolower($1) == "docker-content-digest" {print $2}' | tail -n 1)
+          if [[ "$CANDIDATE_STATUS" != 200 || "$CANDIDATE_REGISTRY_DIGEST" != "$IMAGE_DIGEST" ]]; then
+            echo "::error::Anonymous GHCR access did not prove the exact candidate digest. Make the package public and confirm canonical-repository package access before retrying."
+            exit 1
+          fi
+
+          for tag in 2.0.0 2.0 2 latest; do
+            HEADERS="/tmp/qdrant-stable-${tag}.headers"
+            if ! STATUS=$(curl --silent --show-error --head \
+              --output /dev/null --dump-header "$HEADERS" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $REGISTRY_TOKEN" \
+              --header "Accept: $MANIFEST_ACCEPT" \
+              "https://ghcr.io/v2/${PACKAGE_PATH}/manifests/${tag}"); then
+              echo "::error::Could not classify ${IMAGE_NAME}:${tag}. Confirm public package visibility and canonical-repository package access before retrying."
+              exit 1
+            fi
+            case "$STATUS" in
+              200)
+                OBSERVED=$(tr -d '\r' < "$HEADERS" \
+                  | awk -F': ' 'tolower($1) == "docker-content-digest" {print $2}' | tail -n 1)
+                if [[ "$OBSERVED" != "$IMAGE_DIGEST" ]]; then
+                  echo "::error::${IMAGE_NAME}:${tag} already resolves to $OBSERVED; refusing to publish PyPI before this conflict is resolved by the package owner."
+                  exit 1
+                fi
+                echo "${IMAGE_NAME}:${tag} already resolves to the verified digest."
+                ;;
+              404)
+                echo "${IMAGE_NAME}:${tag} is absent from the proven-public package namespace."
+                ;;
+              401|403)
+                echo "::error::GHCR visibility or access prevents classifying ${IMAGE_NAME}:${tag} as absent or identical. The package owner must make the package public and grant the canonical repository Actions access."
+                exit 1
+                ;;
+              *)
+                echo "::error::GHCR returned HTTP $STATUS for ${IMAGE_NAME}:${tag}; refusing to publish PyPI without an unambiguous absent-or-identical result."
+                exit 1
+                ;;
+            esac
+          done
+      - name: Pull and start Compose at the immutable candidate digest
+        env:
+          MCP_PORTAL_GRANT_TOKEN: release-portal-grant-000000000000000000000000000000000000000000
+          MCP_RUNTIME_IMAGE: ${{ env.IMAGE_NAME }}@${{ steps.resolve.outputs.digest }}
+          MCP_HOST_PORT: 18000
+          MCP_QDRANT_HOST_ALLOWLIST: qdrant.example.com
+          SOURCE_FINGERPRINT: ${{ steps.source.outputs.fingerprint }}
+        run: |
+          cleanup() {
+            docker compose --profile portal down --remove-orphans >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker compose --profile portal config --format json > /tmp/qdrant-published.json
+          EXPECTED_IMAGE="$MCP_RUNTIME_IMAGE" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config = json.loads(Path('/tmp/qdrant-published.json').read_text())
+          service = config['services']['qdrant-mcp-portal']
+          assert service['image'] == os.environ['EXPECTED_IMAGE']
+          assert service['environment']['MCP_IMAGE_REFERENCE'] == os.environ['EXPECTED_IMAGE']
+          assert service['environment']['MCP_MODE'] == 'portal'
+          assert service['environment']['QDRANT_CREDENTIAL_MODE'] == 'request'
+          for key in ('OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORG', 'OPENAI_PROJECT'):
+              assert service['environment'][key] == ''
+          assert service['environment']['EMBEDDING_PROVIDER'] == 'fastembed'
+          assert service['environment']['EMBEDDING_MODEL'] == 'sentence-transformers/all-MiniLM-L6-v2'
+          assert service['environment']['MCP_SERVER_VERSION'] == '2.0.0'
+          for key in ('MCP_BUILD_SHA', 'MCP_SOURCE_FINGERPRINT', 'MCP_IMAGE_DIGEST'):
+              assert key not in service['environment']
+          PY
+          docker compose --profile portal pull qdrant-mcp-portal
+          docker compose --profile portal up --detach --no-build qdrant-mcp-portal
+          healthy=false
+          for _ in {1..60}; do
+            if [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' qdrant-mcp-portal)" == healthy ]]; then
+              healthy=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$healthy" != true ]]; then
+            docker compose --profile portal logs qdrant-mcp-portal >&2 || true
+            exit 1
+          fi
+          EXPECTED_IMAGE="$MCP_RUNTIME_IMAGE" python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          with opener.open('http://127.0.0.1:18000/health', timeout=5) as response:
+              health = json.load(response)
+          assert health['ok'] is True
+          assert health['version'] == '2.0.0'
+          assert health['build_sha'] == os.environ['GITHUB_SHA']
+          assert health['source_fingerprint'] == os.environ['SOURCE_FINGERPRINT']
+          assert health['image_reference'] == os.environ['EXPECTED_IMAGE']
+          assert health['image_digest'] == os.environ['EXPECTED_IMAGE'].rsplit('@', 1)[1]
+          PY
+      - name: Smoke exact anonymously pulled digest
+        run: |
+          bash .github/scripts/smoke-image.sh \
+            "${IMAGE_NAME}@${{ steps.resolve.outputs.digest }}" \
+            "$GITHUB_SHA" \
+            "${{ steps.source.outputs.fingerprint }}"
+
+  pypi:
+    name: Publish verified artifacts with PyPI Trusted Publishing
+    runs-on: ubuntu-24.04
+    needs: [package, image]
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mad-mcp-qdrant
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - name: Download exact Python artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: qdrant-mcp-v2.0.0-dist
+          path: .
+      - name: Verify exact artifacts without executing them
+        run: |
+          test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2
+          (cd dist && sha256sum --check --strict ../release/SHA256SUMS)
+      - name: Publish to PyPI without an API token
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist
+          attestations: true
+          skip-existing: true
+      - name: Require exact public files and PyPI provenance
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in Path('dist').iterdir()
+              if path.is_file()
+          }
+          assert len(expected) == 2, expected
+          deadline = time.monotonic() + 180
+          payload = None
+          while time.monotonic() < deadline:
+              try:
+                  with urllib.request.urlopen(
+                      'https://pypi.org/pypi/mad-mcp-qdrant/2.0.0/json', timeout=15
+                  ) as response:
+                      payload = json.load(response)
+                  break
+              except (urllib.error.URLError, json.JSONDecodeError):
+                  time.sleep(5)
+          assert payload is not None, 'PyPI JSON did not become available'
+          assert payload['info']['version'] == '2.0.0'
+          observed = {
+              item['filename']: item['digests']['sha256'] for item in payload['urls']
+          }
+          assert observed == expected, (observed, expected)
+          for filename in sorted(expected):
+              url = (
+                  'https://pypi.org/integrity/mad-mcp-qdrant/2.0.0/'
+                  + urllib.parse.quote(filename)
+                  + '/provenance'
+              )
+              request = urllib.request.Request(
+                  url, headers={'Accept': 'application/vnd.pypi.integrity.v1+json'}
+              )
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  provenance = json.load(response)
+              bundles = provenance.get('attestation_bundles', [])
+              assert bundles and any(bundle.get('attestations') for bundle in bundles), filename
+          print('PyPI files and provenance match the exact release artifacts')
+          PY
+
+  promote-image:
+    name: Promote the verified candidate without rebuilding
+    runs-on: ubuntu-24.04
+    needs: [image, pypi]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      CANDIDATE_REF: ${{ needs.image.outputs.candidate_ref }}
+      IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Revalidate the candidate and every destination before mutation
+        run: |
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Upstream candidate digest is invalid."
+            exit 1
+          fi
+          docker buildx imagetools inspect "$CANDIDATE_REF" --raw \
+            > /tmp/qdrant-promotion-source.json
+          SOURCE_DIGEST="sha256:$(sha256sum /tmp/qdrant-promotion-source.json | awk '{print $1}')"
+          if [[ "$SOURCE_DIGEST" != "$IMAGE_DIGEST" ]]; then
+            echo "::error::Candidate moved from $IMAGE_DIGEST to $SOURCE_DIGEST; refusing promotion."
+            exit 1
+          fi
+
+          for tag in 2.0.0 2.0 2 latest; do
+            DESTINATION="${IMAGE_NAME}:${tag}"
+            if docker buildx imagetools inspect "$DESTINATION" --raw \
+              > /tmp/qdrant-promotion-destination.json 2>/dev/null; then
+              DESTINATION_DIGEST="sha256:$(sha256sum /tmp/qdrant-promotion-destination.json | awk '{print $1}')"
+              if [[ "$DESTINATION_DIGEST" != "$IMAGE_DIGEST" ]]; then
+                echo "::error::$DESTINATION already resolves to $DESTINATION_DIGEST; refusing to overwrite it with $IMAGE_DIGEST."
+                exit 1
+              fi
+              echo "$DESTINATION already resolves to the verified digest."
+            else
+              echo "$DESTINATION is available for promotion."
+            fi
+          done
+      - name: Attach release tags to the exact candidate digest
+        run: |
+          for tag in 2.0.0 2.0 2 latest; do
+            docker buildx imagetools create \
+              --tag "${IMAGE_NAME}:${tag}" \
+              "${IMAGE_NAME}@${IMAGE_DIGEST}"
+          done
+      - name: Require every promoted tag to resolve anonymously to the exact digest
+        run: |
+          docker logout ghcr.io
+          for tag in 2.0.0 2.0 2 latest; do
+            DESTINATION="${IMAGE_NAME}:${tag}"
+            docker buildx imagetools inspect "$DESTINATION" --raw \
+              > /tmp/qdrant-promoted.json
+            OBSERVED="sha256:$(sha256sum /tmp/qdrant-promoted.json | awk '{print $1}')"
+            if [[ "$OBSERVED" != "$IMAGE_DIGEST" ]]; then
+              echo "::error::$DESTINATION resolves to $OBSERVED instead of $IMAGE_DIGEST."
+              exit 1
+            fi
+          done
+
+  github-release:
+    name: Create GitHub Release last
+    runs-on: ubuntu-24.04
+    needs: [image, pypi, promote-image]
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download exact Python artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: qdrant-mcp-v2.0.0-dist
+          path: .
+      - name: Verify artifact checksums
+        run: (cd dist && sha256sum --check --strict ../release/SHA256SUMS)
+      - name: Create or repair the final GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          cat > /tmp/qdrant-mcp-release-notes.md <<EOF
+          Qdrant MCP v2.0.0 clean public release.
+
+          PyPI: https://pypi.org/project/mad-mcp-qdrant/2.0.0/
+
+          Container: \`${IMAGE_NAME}@${IMAGE_DIGEST}\`
+
+          Verify package files with the attached SHA256SUMS and deploy the container by exact digest.
+          EOF
+          if gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* release/SHA256SUMS \
+              --repo "$GH_REPO" --clobber
+            gh release edit "$GITHUB_REF_NAME" \
+              --repo "$GH_REPO" \
+              --verify-tag \
+              --title "MADPANDA3D Qdrant MCP v2.0.0" \
+              --notes-file /tmp/qdrant-mcp-release-notes.md \
+              --latest
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* release/SHA256SUMS \
+              --repo "$GH_REPO" \
+              --verify-tag \
+              --title "MADPANDA3D Qdrant MCP v2.0.0" \
+              --notes-file /tmp/qdrant-mcp-release-notes.md \
+              --latest
+          fi

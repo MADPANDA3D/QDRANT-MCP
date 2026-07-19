@@ -1,0 +1,31 @@
+MADPANDA3D Qdrant MCP
+Copyright (c) 2026 MADPANDA3D
+
+This repository is derived from and includes work from Qdrant's
+mcp-server-qdrant project and its contributors:
+https://github.com/qdrant/mcp-server-qdrant
+
+The upstream work and this repository are licensed under the Apache License,
+Version 2.0. The complete license text is preserved in LICENSE.
+
+This repository contains substantial MADPANDA3D modifications, including
+expanded Qdrant operations, memory and document workflows, deterministic tool
+metadata, authenticated standalone and brokered modes, request-scoped connector
+handling, security hardening, packaging, containers, documentation, and release
+automation. This notice does not claim original authorship of the upstream work.
+
+Qdrant is a trademark of Qdrant Solutions GmbH. MADPANDA3D Qdrant MCP is an
+independent open-source project and is not affiliated with, endorsed by, or
+sponsored by Qdrant Solutions GmbH.
+
+The stock container image includes the ONNX distribution of
+sentence-transformers/all-MiniLM-L6-v2 from:
+https://huggingface.co/qdrant/all-MiniLM-L6-v2-onnx
+
+The included files byte-match source commit
+5f1b8cd78bc4fb444dd171e59b18f3a3af89a079 and the reviewed FastEmbed archive
+https://storage.googleapis.com/qdrant-fastembed/sentence-transformers-all-MiniLM-L6-v2.tar.gz
+with SHA-256
+2735afe656e156af64ed603dbb1c96f3cae7f937286a8feb27fff7fa979f6a77.
+FastEmbed declares this model under the Apache License, Version 2.0. The model
+source identifies sentence-transformers/all-MiniLM-L6-v2 as the upstream model.

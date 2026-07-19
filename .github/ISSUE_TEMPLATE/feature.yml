@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a bounded Qdrant MCP capability or developer improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Agent workflow
+      description: Describe the outcome and why existing typed tools are insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Qdrant scope and permissions
+      description: Identify resources, provider operations, permissions, and expected data returned.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Proposed safety boundaries
+      description: Cover auth, credential and tenant isolation, allowlists, confirmation, output limits, and failure behavior.
+    validations:
+      required: true
+  - type: checkboxes
+    id: exclusions
+    attributes:
+      label: Public-boundary confirmation
+      options:
+        - label: This request contains no credentials, collection content, tenant data, private endpoints, or deployment evidence.
+          required: true

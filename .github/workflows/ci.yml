@@ -1,0 +1,303 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb
+  UV_VERSION: 0.11.29
+
+jobs:
+  secret-scan:
+    name: Secret and workflow scan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out full publishable history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan source and history with Gitleaks
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/repo:ro" --workdir /repo \
+            "$GITLEAKS_IMAGE" git --config .gitleaks.toml \
+            --redact --verbose --no-banner .
+      - name: Validate workflow syntax and semantics
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl --fail --location --silent --show-error \
+            --output /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check --strict
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint
+
+  source-scan:
+    name: Public source and filesystem scan
+    runs-on: ubuntu-24.04
+    needs: secret-scan
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Enforce public-source boundary
+        run: python3 scripts/check_source_safety.py
+      - name: Scan source configuration and secrets with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.72.0
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig,secret
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+
+  test:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    needs: [secret-scan, source-scan]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12.13', '3.13.11']
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install exact locked environment
+        run: uv sync --frozen --group dev
+      - name: Require the exact matrix interpreter
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          assert sys.version.split()[0] == os.environ['UV_PYTHON'], sys.version
+          PY
+          uv run python - <<'PY'
+          import os
+          import sys
+
+          assert sys.version.split()[0] == os.environ['UV_PYTHON'], sys.version
+          PY
+      - name: Compile public Python sources
+        run: uv run python -m compileall -q src tests scripts
+      - name: Run provider-free test suite
+        run: uv run pytest
+      - name: Catch lint failures
+        run: uv run ruff check src tests scripts
+      - name: Enforce deterministic formatting
+        run: uv run ruff format --check src tests scripts
+      - name: Audit locked runtime dependencies
+        if: matrix.python == '3.12.13'
+        run: |
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements-txt --output-file /tmp/qdrant-requirements.lock
+          uv run pip-audit --requirement /tmp/qdrant-requirements.lock
+
+  package:
+    name: Python package
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.12.13
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Fix the reproducible package epoch to the source commit
+        run: |
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+          [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$GITHUB_ENV"
+      - name: Build twice and prove deterministic Python artifacts
+        run: |
+          uv sync --frozen --group dev
+          mkdir -p /tmp/qdrant-package-rebuild
+          uv build --out-dir dist
+          uv build --out-dir /tmp/qdrant-package-rebuild
+          (cd dist && sha256sum -- *.whl *.tar.gz | sort) > /tmp/qdrant-package-first.sha256
+          (cd /tmp/qdrant-package-rebuild && sha256sum -- *.whl *.tar.gz | sort) \
+            > /tmp/qdrant-package-second.sha256
+          diff -u /tmp/qdrant-package-first.sha256 /tmp/qdrant-package-second.sha256
+          uv run twine check dist/*
+          uv run python scripts/check_package_archives.py
+      - name: Install and inspect the exact wheel
+        run: |
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements-txt --output-file /tmp/qdrant-requirements.lock
+          python -m venv /tmp/qdrant-wheel-venv
+          uv pip install --python /tmp/qdrant-wheel-venv/bin/python \
+            --require-hashes --requirement /tmp/qdrant-requirements.lock
+          uv pip install --python /tmp/qdrant-wheel-venv/bin/python \
+            --no-deps dist/*.whl
+          /tmp/qdrant-wheel-venv/bin/python - <<'PY'
+          from importlib.metadata import entry_points, version
+
+          from mcp_server_qdrant import __version__
+
+          assert version('mad-mcp-qdrant') == '2.0.0'
+          assert __version__ == '2.0.0'
+          scripts = {
+              item.name: item.value for item in entry_points(group='console_scripts')
+          }
+          assert scripts['mad-mcp-qdrant'] == 'mcp_server_qdrant.main:main'
+          assert scripts['mcp-server-qdrant'] == 'mcp_server_qdrant.main:main'
+          PY
+
+  image:
+    name: Hardened authenticated image
+    runs-on: ubuntu-24.04
+    needs: [test, package]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Validate standalone and Portal Compose profiles
+        env:
+          MCP_ACCESS_TOKEN: ci-standalone-token-000000000000000000000000000000000000000000
+          MCP_PORTAL_GRANT_TOKEN: ci-portal-grant-000000000000000000000000000000000000000000
+          MCP_BUILD_SHA: '0000000000000000000000000000000000000001'
+          MCP_SOURCE_FINGERPRINT: '1111111111111111111111111111111111111111111111111111111111111111'
+          QDRANT_URL: https://qdrant.example.com
+          QDRANT_API_KEY: synthetic-qdrant-key
+          OPENAI_API_KEY: synthetic-server-openai-key
+          OPENAI_BASE_URL: https://api.openai.example/v1
+          OPENAI_ORG: synthetic-server-openai-org
+          OPENAI_PROJECT: synthetic-server-openai-project
+          MCP_QDRANT_HOST_ALLOWLIST: qdrant.example.com
+        run: |
+          docker compose --profile standalone config --format json \
+            > /tmp/qdrant-standalone-server.json
+          QDRANT_URL='' QDRANT_API_KEY='' \
+            docker compose --profile standalone-request config --format json \
+            > /tmp/qdrant-standalone-request.json
+          docker compose --profile portal config --format json \
+            > /tmp/qdrant-portal.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          cases = (
+              ('standalone-server', 'qdrant-mcp-standalone', 'standalone', 'server'),
+              ('standalone-request', 'qdrant-mcp-standalone-request', 'standalone', 'request'),
+              ('portal', 'qdrant-mcp-portal', 'portal', 'request'),
+          )
+          for file_name, service_name, mode, credential_mode in cases:
+              config = json.loads(Path(f'/tmp/qdrant-{file_name}.json').read_text())
+              assert config['name'] == 'qdrant-mcp'
+              assert set(config['services']) == {service_name}
+              service = config['services'][service_name]
+              assert service['image'] == 'qdrant-mcp:local-source'
+              assert service['user'] == '10001:10001'
+              assert service['read_only'] is True
+              assert service['cap_drop'] == ['ALL']
+              assert service['security_opt'] == ['no-new-privileges:true']
+              assert service['pids_limit'] == 256
+              assert service['init'] is True
+              assert not service.get('volumes')
+              assert service['environment']['MCP_MODE'] == mode
+              assert service['environment']['QDRANT_CREDENTIAL_MODE'] == credential_mode
+              assert service['environment']['MCP_SERVER_VERSION'] == '2.0.0'
+              assert 'MCP_BUILD_SHA' not in service['environment']
+              assert 'MCP_SOURCE_FINGERPRINT' not in service['environment']
+              assert 'MCP_IMAGE_DIGEST' not in service['environment']
+              assert service['environment']['MCP_IMAGE_REFERENCE'] == 'qdrant-mcp:local-source'
+              assert 'qdrant-mcp-standalone:*' in service['environment']['MCP_ALLOWED_HOSTS']
+              assert 'qdrant-mcp-standalone-request:*' in service['environment']['MCP_ALLOWED_HOSTS']
+              assert 'qdrant-mcp-portal:*' in service['environment']['MCP_ALLOWED_HOSTS']
+              assert service['build']['args']['BUILD_SHA'] == '0' * 39 + '1'
+              assert service['build']['args']['SOURCE_FINGERPRINT'] == '1' * 64
+              assert service['build']['args']['IMAGE_VERSION'] == '2.0.0-dev'
+              assert 'PACKAGE_VERSION' not in service['build']['args']
+              ports = service['ports']
+              assert len(ports) == 1
+              assert ports[0]['host_ip'] == '127.0.0.1'
+              assert ports[0]['target'] == 8000
+          portal = json.loads(Path('/tmp/qdrant-portal.json').read_text())
+          portal_env = portal['services']['qdrant-mcp-portal']['environment']
+          assert portal_env['MCP_ACCESS_TOKEN'] == ''
+          assert portal_env['QDRANT_URL'] == ''
+          assert portal_env['QDRANT_API_KEY'] == ''
+          assert portal_env['MCP_TENANT_ID_HEADER'] == 'x-madpanda-user-id'
+          request = json.loads(Path('/tmp/qdrant-standalone-request.json').read_text())
+          request_env = request['services']['qdrant-mcp-standalone-request']['environment']
+          assert request_env['QDRANT_URL'] == ''
+          assert request_env['QDRANT_API_KEY'] == ''
+          for key in ('OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORG', 'OPENAI_PROJECT'):
+              assert request_env[key] == ''
+              assert portal_env[key] == ''
+          for environment in (request_env, portal_env):
+              assert environment['EMBEDDING_PROVIDER'] == 'fastembed'
+              assert environment['EMBEDDING_MODEL'] == 'sentence-transformers/all-MiniLM-L6-v2'
+          assert request_env['MCP_ALLOW_REQUEST_OVERRIDES'] == 'true'
+          assert request_env['MCP_REQUIRE_REQUEST_QDRANT_URL'] == 'true'
+          assert request_env['MCP_DISABLE_DEFAULT_QDRANT_FALLBACK'] == 'true'
+          assert portal_env['MCP_ALLOW_REQUEST_OVERRIDES'] == 'true'
+          assert portal_env['MCP_REQUIRE_REQUEST_QDRANT_URL'] == 'true'
+          assert portal_env['MCP_DISABLE_DEFAULT_QDRANT_FALLBACK'] == 'true'
+          PY
+      - name: Build exact source
+        id: source
+        run: |
+          SOURCE_FINGERPRINT=$(git archive --format=tar HEAD | sha256sum | awk '{print $1}')
+          echo "fingerprint=$SOURCE_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          docker build \
+            --build-arg BUILD_SHA="$GITHUB_SHA" \
+            --build-arg SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT" \
+            --build-arg IMAGE_VERSION=2.0.0-dev \
+            --tag qdrant-mcp:ci \
+            .
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.72.0
+          image-ref: qdrant-mcp:ci
+          format: table
+          exit-code: 1
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Smoke all authenticated credential profiles without provider network
+        run: |
+          bash .github/scripts/smoke-image.sh \
+            qdrant-mcp:ci \
+            "$GITHUB_SHA" \
+            "${{ steps.source.outputs.fingerprint }}"

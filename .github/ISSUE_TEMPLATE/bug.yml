@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible, non-security defect with sanitized evidence.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never include credentials, collection contents, private endpoints, tenant data, or runtime files.
+  - type: input
+    id: version
+    attributes:
+      label: Version or image digest
+      placeholder: v2.0.0 or ghcr.io/...@sha256:<digest>
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Runtime and credential mode
+      options:
+        - local stdio / server credentials
+        - standalone HTTP / server credentials
+        - standalone HTTP / request-scoped credentials
+        - Portal HTTP / request-scoped credentials
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Use synthetic identifiers and redact every credential and payload.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal provider-free reproduction
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public-boundary confirmation
+      options:
+        - label: I removed credentials, collection content, tenant data, private endpoints, and runtime files.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true
